@@ -19,8 +19,12 @@
 #define MAX_PLAYER_BULLETS 2
 #define HAT_COUNT 3
 #define SAVE_FILE "blink_saves.txt"
-#define PLAYER_NAME_LENGTH 3
+#define PLAYER_NAME_MAX_CHARS 6
+#define PLAYER_NAME_STORAGE 16
 #define MAX_PROFILES 100
+#define LAURA_HEART_NAME "LAURA♥"
+#define LEADERBOARD_NAME_WIDTH 6
+#define HEART_SYMBOL "♥"
 
 #define BLINK_DURATION_MS 650
 #define PLAYER_MOVE_DELAY_MS 110
@@ -31,6 +35,7 @@
 #define GUARD_ALERT_DELAY_MS 210
 #define ENEMY_SHOOT_DELAY_MS 520
 #define FRAME_DELAY_MS 33
+
 
 /*
     BLINK - real-time terminal version
@@ -86,7 +91,7 @@ typedef struct {
 } Level;
 
 typedef struct {
-    char name[PLAYER_NAME_LENGTH + 1];
+    char name[PLAYER_NAME_STORAGE];
     int wins;
     int deaths;
     long long bestTimeMs;
@@ -194,7 +199,7 @@ char message[180] = "The cursor blinks into existence.";
 const char *hatSymbols[HAT_COUNT] = {"ô", "õ", "ö"};
 int unlockedHats[HAT_COUNT] = {0, 0, 0};
 int selectedHat = -1;
-char currentPlayerName[PLAYER_NAME_LENGTH + 1] = "---";
+char currentPlayerName[PLAYER_NAME_STORAGE] = "------";
 int hasCurrentPlayer = 0;
 
 int hatActive(int hatIndex) {
@@ -232,6 +237,33 @@ void disableRawMode(void) {
         printf("\033[?25h");
         fflush(stdout);
         rawModeEnabled = 0;
+    }
+}
+
+int visibleTextLength(const char *text) {
+    int length = 0;
+    int i = 0;
+
+    while (text[i] != '\0') {
+        if (strncmp(&text[i], HEART_SYMBOL, strlen(HEART_SYMBOL)) == 0) {
+            length++;
+            i += strlen(HEART_SYMBOL);
+        } else {
+            length++;
+            i++;
+        }
+    }
+
+    return length;
+}
+
+void printPaddedText(const char *text, int width) {
+    int visibleLength = visibleTextLength(text);
+
+    printf("%s", text);
+
+    for (int i = visibleLength; i < width; i++) {
+        printf(" ");
     }
 }
 
@@ -422,16 +454,24 @@ void killPlayer(const char *deathMessage) {
 }
 
 void normalizePlayerName(char *name) {
-    for (int i = 0; i < PLAYER_NAME_LENGTH; i++) {
-        name[i] = (char) toupper((unsigned char) name[i]);
+    for (int i = 0; name[i] != '\0'; i++) {
+        name[i] = toupper((unsigned char)name[i]);
     }
 
-    name[PLAYER_NAME_LENGTH] = '\0';
+    if (strcmp(name, "LAURA") == 0) {
+        strcpy(name, LAURA_HEART_NAME);
+    }
 }
 
 int isValidPlayerName(const char *name) {
-    for (int i = 0; i < PLAYER_NAME_LENGTH; i++) {
-        if (!isalpha((unsigned char) name[i])) {
+    int length = strlen(name);
+
+    if (length < 1 || length > PLAYER_NAME_MAX_CHARS) {
+        return 0;
+    }
+
+    for (int i = 0; i < length; i++) {
+        if (!isalpha((unsigned char)name[i])) {
             return 0;
         }
     }
@@ -487,7 +527,7 @@ int readProfiles(PlayerProfile profiles[], int *profileCount) {
         PlayerProfile profile;
         int valuesRead = fscanf(
             file,
-            "%3s %d %d %lld %d %d %d %d",
+            "%15s %d %d %lld %d %d %d %d",
             profile.name,
             &profile.wins,
             &profile.deaths,
@@ -502,7 +542,7 @@ int readProfiles(PlayerProfile profiles[], int *profileCount) {
             break;
         }
 
-        profile.name[PLAYER_NAME_LENGTH] = '\0';
+        profile.name[PLAYER_NAME_STORAGE - 1] = '\0';
         profiles[*profileCount] = profile;
         (*profileCount)++;
     }
@@ -650,7 +690,7 @@ void deleteCurrentProfile(void) {
     profileCount--;
     writeProfiles(profiles, profileCount);
 
-    strcpy(currentPlayerName, "---");
+    strcpy(currentPlayerName, "------");
     hasCurrentPlayer = 0;
     selectedHat = -1;
 
@@ -667,8 +707,8 @@ void askForPlayerName(void) {
         printf("╔══════════════════════╗\n");
         printf("║     PLAYER NAME      ║\n");
         printf("╚══════════════════════╝\n\n");
-        printf("Enter 3 letters, arcade style.\n");
-        printf("Example: LUF, AAA, XYZ\n\n");
+        printf("Enter up to 6 letters, arcade style.\n");
+        printf("Example: LUIS, LUF, LAURA\n\n");
         printf("Name: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
@@ -677,15 +717,11 @@ void askForPlayerName(void) {
 
         input[strcspn(input, "\n")] = '\0';
 
-        if (strlen(input) != PLAYER_NAME_LENGTH) {
+        if (!isValidPlayerName(input)) {
             continue;
         }
 
         normalizePlayerName(input);
-
-        if (!isValidPlayerName(input)) {
-            continue;
-        }
 
         loadOrCreateProfile(input);
         return;
@@ -858,17 +894,22 @@ void showLeaderboard(void) {
     printf("╚══════════════════════════════════╝\n\n");
 
     printf("Ranked by fastest completed run.\n\n");
-    printf("RK  NAM  BEST TIME  WINS  DEATHS\n");
-    printf("--  ---  ---------  ----  ------\n");
+    printf("RK  ");
+    printPaddedText("NAME", LEADERBOARD_NAME_WIDTH);
+    printf("  BEST TIME  WINS  DEATHS\n");
+
+    printf("--  ");
+    printPaddedText("------", LEADERBOARD_NAME_WIDTH);
+    printf("  ---------  ----  ------\n");
 
     for (int i = 0; i < profileCount && i < 10; i++) {
         formatTime(profiles[i].bestTimeMs, formattedTime, sizeof(formattedTime));
-        printf("%2d  %-3s  %9s  %4d  %6d\n",
-               i + 1,
-               profiles[i].name,
-               formattedTime,
-               profiles[i].wins,
-               profiles[i].deaths);
+    printf("%2d  ", i + 1);
+    printPaddedText(profiles[i].name, LEADERBOARD_NAME_WIDTH);
+    printf("  %9s  %4d  %6d\n",
+        formattedTime,
+        profiles[i].wins,
+        profiles[i].deaths);
     }
 
     if (profileCount == 0) {
