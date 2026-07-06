@@ -23,7 +23,7 @@
 #define PLAYER_NAME_STORAGE 16
 #define MAX_PROFILES 100
 #define LAURA_HEART_NAME "LAURA♥"
-#define LEADERBOARD_NAME_WIDTH 6
+#define LEADERBOARD_NAME_WIDTH 8
 #define HEART_SYMBOL "♥"
 
 #define BLINK_DURATION_MS 650
@@ -242,15 +242,17 @@ void disableRawMode(void) {
 
 int visibleTextLength(const char *text) {
     int length = 0;
-    int i = 0;
 
-    while (text[i] != '\0') {
-        if (strncmp(&text[i], HEART_SYMBOL, strlen(HEART_SYMBOL)) == 0) {
+    for (int i = 0; text[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)text[i];
+
+        /*
+            Count UTF-8 multibyte characters as one visible character.
+            Continuation bytes have the binary pattern 10xxxxxx.
+            This keeps names like LAURA♥ aligned in the leaderboard.
+        */
+        if ((c & 0xC0) != 0x80) {
             length++;
-            i += strlen(HEART_SYMBOL);
-        } else {
-            length++;
-            i++;
         }
     }
 
@@ -311,10 +313,20 @@ void clearScreen(void) {
     printf("\033[H\033[J");
 }
 
-void waitForEnter(void) {
+void waitForBack(void) {
     char input[16];
-    printf("\nPress ENTER to continue.");
-    fgets(input, sizeof(input), stdin);
+
+    while (1) {
+        printf("\nPress B to go back.");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return;
+        }
+
+        if (tolower((unsigned char)input[0]) == 'b') {
+            return;
+        }
+    }
 }
 
 int signOf(int value) {
@@ -894,29 +906,33 @@ void showLeaderboard(void) {
     printf("╚══════════════════════════════════╝\n\n");
 
     printf("Ranked by fastest completed run.\n\n");
-    printf("RK  ");
-    printPaddedText("NAME", LEADERBOARD_NAME_WIDTH);
-    printf("  BEST TIME  WINS  DEATHS\n");
 
-    printf("--  ");
-    printPaddedText("------", LEADERBOARD_NAME_WIDTH);
-    printf("  ---------  ----  ------\n");
+    printf("+----+----------+-----------+------+--------+\n");
+    printf("| RK | ");
+    printPaddedText("NAME", LEADERBOARD_NAME_WIDTH);
+    printf(" | BEST TIME | WINS | DEATHS |\n");
+    printf("+----+----------+-----------+------+--------+\n");
 
     for (int i = 0; i < profileCount && i < 10; i++) {
         formatTime(profiles[i].bestTimeMs, formattedTime, sizeof(formattedTime));
-    printf("%2d  ", i + 1);
-    printPaddedText(profiles[i].name, LEADERBOARD_NAME_WIDTH);
-    printf("  %9s  %4d  %6d\n",
-        formattedTime,
-        profiles[i].wins,
-        profiles[i].deaths);
+
+        printf("| %2d | ", i + 1);
+        printPaddedText(profiles[i].name, LEADERBOARD_NAME_WIDTH);
+        printf(" | %9s | %4d | %6d |\n",
+               formattedTime,
+               profiles[i].wins,
+               profiles[i].deaths);
     }
 
     if (profileCount == 0) {
-        printf("No local profiles yet.\n");
+        printf("|    | ");
+        printPaddedText("NO DATA", LEADERBOARD_NAME_WIDTH);
+        printf(" | --:--.--- |    0 |      0 |\n");
     }
 
-    waitForEnter();
+    printf("+----+----------+-----------+------+--------+\n");
+
+    waitForBack();
 }
 
 int showTitleScreen(void) {
@@ -969,7 +985,7 @@ int askRestart(void) {
     char input[32];
 
     while (1) {
-        printf("\nR - restart | H - hats | L - leaderboard | Q - quit\n");
+        printf("\nR - restart | H - hats | L - leaderboard | B - back to main menu\n");
         printf("Command: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
@@ -986,7 +1002,7 @@ int askRestart(void) {
             showHatMenu();
         } else if (command == 'l') {
             showLeaderboard();
-        } else if (command == 'q') {
+        } else if (command == 'b') {
             return 0;
         }
     }
@@ -1787,7 +1803,7 @@ void drawRoomRealtime(void) {
         printf("\n");
     }
 
-    printf("\nWASD move | SPACE blink | F shoot | Q quit run\n");
+    printf("\nWASD move | SPACE blink | F shoot | B back\n");
     printf("Message: %s\n", message);
     fflush(stdout);
 }
@@ -1802,7 +1818,7 @@ void handleGameplayInput(long long currentMs, int *quitRun) {
 
         char command = (char)tolower(key);
 
-        if (command == 'q') {
+        if (command == 'b') {
             *quitRun = 1;
             return;
         }
@@ -1885,19 +1901,20 @@ int main(void) {
     srand((unsigned int)time(NULL));
     atexit(disableRawMode);
 
-    if (!showTitleScreen()) {
-        printf("\nGame closed.\n");
-        return 0;
-    }
-
     while (1) {
-        runRealtimeGame();
-
-        if (!askRestart()) {
+        if (!showTitleScreen()) {
             break;
+        }
+
+        while (1) {
+            runRealtimeGame();
+
+            if (!askRestart()) {
+                break;
+            }
         }
     }
 
-    printf("\nGame closed.\n");
+    printf("%cGame closed.%c", 10, 10);
     return 0;
 }
