@@ -9,13 +9,13 @@
 #include <unistd.h>
 #include <sys/select.h>
 
-#define HEIGHT 9
-#define WIDTH 20
-#define MAX_GUARDS 4
+#define HEIGHT 30
+#define WIDTH 60
+#define MAX_GUARDS 12
 #define LEVEL_COUNT 3
 #define MAX_SIGNAL 5
 #define GUARD_AMMO 3
-#define MAX_ENEMY_BULLETS 12
+#define MAX_ENEMY_BULLETS 40
 #define MAX_PLAYER_BULLETS 2
 #define HAT_COUNT 3
 #define SAVE_FILE "blink_saves.txt"
@@ -33,6 +33,8 @@
 #define ENEMY_BULLET_DELAY_MS 100
 #define GUARD_PATROL_DELAY_MS 430
 #define GUARD_ALERT_DELAY_MS 210
+#define HARD_GUARD_PATROL_DELAY_MS 240
+#define HARD_GUARD_ALERT_DELAY_MS 120
 #define ENEMY_SHOOT_DELAY_MS 520
 #define FRAME_DELAY_MS 33
 
@@ -57,20 +59,23 @@
     * = Signal pickup
     : = normal bullet, player or enemy
     ~ = piercing player bullet while using hat õ
-    E = exit, visually representing []
-    ^ > < v = guards and their direction
+    [ and ] = exit tiles
+    ^ > < v = normal guards and their direction
+    » « = fast guards with omnidirectional shots
 
     During gameplay:
     W A S D = move without Enter
     SPACE   = blink for a short hidden duration
     F       = shoot in last movement direction
-    Q       = quit run
+    B       = abandon run / back
 */
 
 typedef struct {
     int row;
     int col;
     char direction;
+    int hard;
+    long long lastMoveMs;
 } Guard;
 
 typedef struct {
@@ -102,77 +107,165 @@ typedef struct {
 Level levels[LEVEL_COUNT] = {
     {
         {
-            "####################",
-            "#..........*.......#",
-            "#..####......####..#",
-            "#..................#",
-            "#......######......#",
-            "#....*.............#",
-            "#..####......####..#",
-            "#...............E..#",
-            "####################"
+            "############################################################",
+            "#.......................#.........................#........#",
+            "#...........#...........#.............#...........#........#",
+            "#.......*...#.........................#...........#........D",
+            "#.......................#.............#...........#........#",
+            "#...........#...........#.............#....................#",
+            "#...######.#########.#############.#########.######.####...#",
+            "#...........#...........#.............#...........#........#",
+            "#...........#...........#.............#...........#........#",
+            "#...........#.........................#...........#........#",
+            "#...........#...........#.............#...........#........#",
+            "#.....*.................#.............#...........#........#",
+            "#...........#...........#.............#....................#",
+            "######.##########.############.########.#########.#........#",
+            "#...........#...........#.............#...........#........#",
+            "#...........#...........#.............#...........#........#",
+            "#...........#.....................*...#...........#........#",
+            "#...........#...........#.............#...........#........#",
+            "#.......................#.............#...........#........#",
+            "#...........#...........#.............#....................#",
+            "#.......######.############.########.############.##########",
+            "#...........#...........#.............#...........#........#",
+            "#...........#...........#.............#...........#........#",
+            "#.......*...#.........................#...........#........#",
+            "#.......................#.............#...........#........#",
+            "#####.###############.###########.#############.#####......#",
+            "#...........#...........#..................................#",
+            "#.......................#.............#......*.............#",
+            "#.......................................................[].#",
+            "############################################################",
         },
         1,
         1,
-        3,
+        8,
         {
-            {1, 10, 'v'},
-            {3, 4, '>'},
-            {5, 15, '<'},
-            {0, 0, '>'}
+            {2, 40, '<', 0, 0},
+            {6, 5, '>', 0, 0},
+            {10, 28, 'v', 0, 0},
+            {15, 44, '<', 0, 0},
+            {20, 10, '>', 0, 0},
+            {26, 35, '^', 0, 0},
+            {27, 52, '<', 0, 0},
+            {3, 55, '<', 1, 0},
         },
-        "Room 1. The terminal notices your shape."
+        "Room 1. Zero enters a wider memory block."
     },
     {
         {
-            "####################",
-            "#..*...............#",
-            "#..####..######....#",
-            "#.............#....#",
-            "######..####..#....#",
-            "#.............#....#",
-            "#....######..####..#",
-            "#...............E..#",
-            "####################"
+            "############################################################",
+            "#..........................................................#",
+            "#...............................................*..........#",
+            "#...#####################################################..#",
+            "#...#...................................................#..#",
+            "#...#.................#########.........................#..#",
+            "#...#.........*.........................................#..#",
+            "#...#....##########################################.....#..#",
+            "#...#....#........................................#.....#..#",
+            "#...#....#........................................#.....#..#",
+            "#...#....#........................*...............#.....#..#",
+            "#...#....#.....##############################.....#.....#..#",
+            "#...#....#.....#..................#.........#.....#.....#..#",
+            "#...#....#.....#..................#.....*...#.....#.....#..#",
+            "#...#....#.....#..................#.........#.....#.....#..#",
+            "#...#....#.....#.......*.....[]...#.........#.....#.....#..#",
+            "#...#....#........................#.........#.....#.....#..#",
+            "#...#....#..................................#.....#.....#..#",
+            "#...#....####################################.....#.....#..#",
+            "#...#.............................................#.....#..#",
+            "#...#.......................*.....................#.....#..#",
+            "#...#.............................................#.....#..#",
+            "#...###############################################.....#..#",
+            "#.......................................................#..#",
+            "D.................................*.....................#..#",
+            "#...................#######.######......................#..#",
+            "#########################################################..#",
+            "#..........................................................#",
+            "#.................*........................................#",
+            "############################################################",
         },
-        7,
+        28,
         1,
-        3,
+        8,
         {
-            {1, 15, '<'},
-            {3, 8, '>'},
-            {5, 12, '^'},
-            {0, 0, '>'}
+            {28, 18, '>', 0, 0},
+            {28, 44, '>', 0, 0},
+            {2, 48, '<', 0, 0},
+            {6, 14, '>', 1, 0},
+            {24, 30, '>', 0, 0},
+            {20, 35, '<', 1, 0},
+            {10, 35, '<', 0, 0},
+            {14, 54, '<', 1, 0},
         },
-        "Room 2. The patrols are learning your rhythm."
+        "Room 2. Zero follows a thinner spiral toward the center door."
     },
     {
         {
-            "####################",
-            "#......#...........#",
-            "#..*...#..#######..#",
-            "#......#...........#",
-            "#..########..#######",
-            "#..................#",
-            "####..######..####.#",
-            "#..............*E..#",
-            "####################"
+            "############################################################",
+            "#..........................................................#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...*.......#...........#..........#.......#",
+            "#.########.#######.############..#############.###########.#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#.......................#..........#.......#",
+            "#....*..#.......#...........#...........#..........#.......#",
+            "#.########.####.###############.######.#######.###########.#",
+            "#.......#...................#......................#.......#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...........#...........#....*.....#.......#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.#.######.####################.##############.###.#######.#",
+            "#..........................................................D",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...........#..............................#",
+            "#...........*...#...........#...........#..........#.......#",
+            "#.########.############.#######.#.############.###########.#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#..........................................................#",
+            "#.......#...................#......*....#..........#.......#",
+            "#.########.####################.###########.##.###########.#",
+            "#...............#...........#...........#..........#.......#",
+            "#.......#.......#...........#...........#..........#.......#",
+            "#.......#.......#...........#...........#.........*#.......#",
+            "#.......................................................[].#",
+            "############################################################",
         },
         1,
         1,
-        4,
+        8,
         {
-            {1, 10, 'v'},
-            {3, 16, '<'},
-            {5, 4, '>'},
-            {7, 12, '^'}
+            {3, 20, '>', 0, 0},
+            {4, 51, '<', 1, 0},
+            {8, 12, 'v', 0, 0},
+            {11, 35, '<', 0, 0},
+            {15, 10, '>', 1, 0},
+            {20, 48, '^', 0, 0},
+            {24, 25, '>', 1, 0},
+            {27, 50, '<', 1, 0},
         },
-        "Room 3. The exit is watching back."
+        "Room 3. Zero crosses a dense terminal maze."
     }
 };
 
 char room[HEIGHT][WIDTH + 1];
 int damagedWalls[HEIGHT][WIDTH];
+int collectedHatThisLevel[LEVEL_COUNT];
+int inSecretRoom = 0;
+int secretLevelIndex = -1;
+int secretReturnRow = 0;
+int secretReturnCol = 0;
+int secretEntranceSide = 1;
+
+char savedMainRoom[HEIGHT][WIDTH + 1];
+int savedMainDamagedWalls[HEIGHT][WIDTH];
+Guard savedMainGuards[MAX_GUARDS];
+int savedMainGuardAmmo[MAX_GUARDS];
+int savedMainGuardCount = 0;
+int savedMainAlertMode = 0;
 
 Guard guards[MAX_GUARDS];
 int guardAmmo[MAX_GUARDS];
@@ -194,13 +287,16 @@ Bullet enemyBullets[MAX_ENEMY_BULLETS];
 char lastDirection = '>';
 char lastMoveCommand = '\0';
 long long lastMovePoseMs = 0;
-char message[180] = "The cursor blinks into existence.";
+char message[180] = "Zero blinks into existence.";
 
 const char *hatSymbols[HAT_COUNT] = {"ô", "õ", "ö"};
 int unlockedHats[HAT_COUNT] = {0, 0, 0};
 int selectedHat = -1;
 char currentPlayerName[PLAYER_NAME_STORAGE] = "------";
 int hasCurrentPlayer = 0;
+
+void clearPlayerBullets(void);
+void clearEnemyBullets(void);
 
 int hatActive(int hatIndex) {
     return selectedHat == hatIndex &&
@@ -329,6 +425,10 @@ void waitForBack(void) {
     }
 }
 
+int isInsideMap(int row, int col) {
+    return row >= 0 && row < HEIGHT && col >= 0 && col < WIDTH;
+}
+
 int signOf(int value) {
     if (value > 0) {
         return 1;
@@ -355,11 +455,35 @@ void formatTime(long long ms, char *buffer, size_t bufferSize) {
 }
 
 int isWallAt(int row, int col) {
-    if (row < 0 || row >= HEIGHT || col < 0 || col >= WIDTH) {
+    if (!isInsideMap(row, col)) {
         return 0;
     }
 
     return room[row][col] == '#';
+}
+
+int isSolidWallAt(int row, int col) {
+    if (!isInsideMap(row, col)) {
+        return 1;
+    }
+
+    return room[row][col] == '#' || room[row][col] == 'D';
+}
+
+int isExitTileAt(int row, int col) {
+    if (!isInsideMap(row, col)) {
+        return 0;
+    }
+
+    return room[row][col] == '[' || room[row][col] == ']';
+}
+
+int isGuardBlockedTile(int row, int col) {
+    if (isSolidWallAt(row, col)) {
+        return 1;
+    }
+
+    return room[row][col] == '*' || room[row][col] == '?' || room[row][col] == 'S' || isExitTileAt(row, col);
 }
 
 void printWallSymbol(int row, int col) {
@@ -859,6 +983,242 @@ void unlockRandomHat(void) {
     printf("It has been equipped for the next run.\n");
 }
 
+void chooseHatDuringRun(int foundHatIndex) {
+    char input[32];
+
+    if (foundHatIndex >= 0 && foundHatIndex < HAT_COUNT) {
+        unlockedHats[foundHatIndex] = 1;
+    }
+
+    disableRawMode();
+
+    while (1) {
+        clearScreen();
+        printf("╔════════════════════════════╗\n");
+        printf("║        HIDDEN HAT          ║\n");
+        printf("╚════════════════════════════╝\n\n");
+
+        if (foundHatIndex >= 0 && foundHatIndex < HAT_COUNT) {
+            printf("Zero found: %s\n\n", hatSymbols[foundHatIndex]);
+        }
+
+        printf("Choose the active hat for the rest of this run.\n\n");
+        printf("0 - no hat: o\n");
+
+        for (int i = 0; i < HAT_COUNT; i++) {
+            const char *power = "";
+            if (i == 0) {
+                power = "touch guards to delete them";
+            } else if (i == 1) {
+                power = "~ shot pierces guards";
+            } else if (i == 2) {
+                power = "double shot";
+            }
+
+            printf("%d - %s [%s] - %s\n",
+                   i + 1,
+                   hatSymbols[i],
+                   unlockedHats[i] ? "unlocked" : "locked",
+                   power);
+        }
+
+        printf("\nCommand: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            break;
+        }
+
+        char command = (char)tolower((unsigned char)input[0]);
+
+        if (command == '0') {
+            selectedHat = -1;
+            break;
+        }
+
+        if (command >= '1' && command <= '3') {
+            int hatIndex = command - '1';
+
+            if (unlockedHats[hatIndex]) {
+                selectedHat = hatIndex;
+                break;
+            }
+        }
+    }
+
+    saveCurrentProfile();
+    enableRawMode();
+}
+
+void unlockHatFromPickup(int hatIndex) {
+    if (hatIndex < 0 || hatIndex >= HAT_COUNT) {
+        return;
+    }
+
+    chooseHatDuringRun(hatIndex);
+    snprintf(message, sizeof(message), "Zero claimed the hidden hat: %s.", hatSymbols[hatIndex]);
+}
+
+void saveMainLevelStateBeforeSecret(void) {
+    for (int row = 0; row < HEIGHT; row++) {
+        strcpy(savedMainRoom[row], room[row]);
+
+        for (int col = 0; col < WIDTH; col++) {
+            savedMainDamagedWalls[row][col] = damagedWalls[row][col];
+        }
+    }
+
+    savedMainGuardCount = guardCount;
+    savedMainAlertMode = alertMode;
+
+    for (int i = 0; i < guardCount; i++) {
+        savedMainGuards[i] = guards[i];
+        savedMainGuardAmmo[i] = guardAmmo[i];
+    }
+}
+
+void generateSecretRoom(int hatIndex) {
+    int roomTop = 10;
+    int roomBottom = 18;
+    int roomLeft;
+    int roomRight;
+    int entranceRow = 14;
+    int entranceCol;
+    int questionRow = 14;
+    int questionCol;
+
+    for (int row = 0; row < HEIGHT; row++) {
+        for (int col = 0; col < WIDTH; col++) {
+            room[row][col] = '#';
+            damagedWalls[row][col] = 0;
+        }
+        room[row][WIDTH] = '\0';
+    }
+
+    if (secretEntranceSide < 0) {
+        // The main level opened on the left edge, so Zero enters
+        // this hidden room from the right side and moves left.
+        roomLeft = 30;
+        roomRight = 48;
+        entranceCol = WIDTH - 2;
+        questionCol = 39;
+    } else {
+        // The main level opened on the right edge, so Zero enters
+        // this hidden room from the left side and moves right.
+        roomLeft = 11;
+        roomRight = 29;
+        entranceCol = 1;
+        questionCol = 20;
+    }
+
+    for (int row = roomTop; row <= roomBottom; row++) {
+        for (int col = roomLeft; col <= roomRight; col++) {
+            if (row == roomTop || row == roomBottom || col == roomLeft || col == roomRight) {
+                room[row][col] = '#';
+            } else {
+                room[row][col] = '.';
+            }
+        }
+    }
+
+    if (secretEntranceSide < 0) {
+        for (int col = roomRight; col <= entranceCol; col++) {
+            room[entranceRow][col] = '.';
+        }
+        room[entranceRow - 2][roomLeft + 4] = '#';
+        room[entranceRow - 1][roomLeft + 4] = '#';
+        room[entranceRow + 1][roomRight - 4] = '#';
+        room[entranceRow + 2][roomRight - 4] = '#';
+        lastDirection = '<';
+    } else {
+        for (int col = entranceCol; col <= roomLeft; col++) {
+            room[entranceRow][col] = '.';
+        }
+        room[entranceRow - 2][roomRight - 4] = '#';
+        room[entranceRow - 1][roomRight - 4] = '#';
+        room[entranceRow + 1][roomLeft + 4] = '#';
+        room[entranceRow + 2][roomLeft + 4] = '#';
+        lastDirection = '>';
+    }
+
+    room[questionRow][questionCol] = '?';
+
+    playerRow = entranceRow;
+    playerCol = entranceCol;
+    guardCount = 0;
+    alertMode = 0;
+    blinkActive = 0;
+    clearPlayerBullets();
+    clearEnemyBullets();
+    lastMoveCommand = '\0';
+
+    if (hatIndex >= 0 && hatIndex < HAT_COUNT) {
+        snprintf(message, sizeof(message), "A side passage opens outside the level. Find %s.", hatSymbols[hatIndex]);
+    } else {
+        strcpy(message, "A side passage opens outside the level.");
+    }
+}
+
+void restoreMainLevelAfterSecret(void) {
+    for (int row = 0; row < HEIGHT; row++) {
+        strcpy(room[row], savedMainRoom[row]);
+
+        for (int col = 0; col < WIDTH; col++) {
+            damagedWalls[row][col] = savedMainDamagedWalls[row][col];
+        }
+    }
+
+    guardCount = savedMainGuardCount;
+    alertMode = savedMainAlertMode;
+
+    for (int i = 0; i < guardCount; i++) {
+        guards[i] = savedMainGuards[i];
+        guardAmmo[i] = savedMainGuardAmmo[i];
+    }
+
+    playerRow = secretReturnRow;
+    playerCol = secretReturnCol;
+    inSecretRoom = 0;
+    secretLevelIndex = -1;
+    secretEntranceSide = 1;
+    blinkActive = 0;
+    clearPlayerBullets();
+    clearEnemyBullets();
+    lastMoveCommand = '\0';
+    strcpy(message, "Zero returns from the hidden room.");
+}
+
+void enterSecretRoomFromEntrance(int entranceRow, int entranceCol) {
+    if (inSecretRoom) {
+        return;
+    }
+
+    saveMainLevelStateBeforeSecret();
+
+    secretReturnRow = entranceRow;
+    secretReturnCol = entranceCol;
+
+    if (entranceRow == 0) {
+        secretReturnRow = 1;
+    } else if (entranceRow == HEIGHT - 1) {
+        secretReturnRow = HEIGHT - 2;
+    }
+
+    if (entranceCol == 0) {
+        secretReturnCol = 1;
+        secretEntranceSide = -1;
+    } else if (entranceCol == WIDTH - 1) {
+        secretReturnCol = WIDTH - 2;
+        secretEntranceSide = 1;
+    } else {
+        secretEntranceSide = lastDirection == '<' ? -1 : 1;
+    }
+
+    inSecretRoom = 1;
+    secretLevelIndex = currentLevel;
+    generateSecretRoom(currentLevel);
+}
+
+
 int compareProfilesForLeaderboard(const void *left, const void *right) {
     const PlayerProfile *a = (const PlayerProfile *)left;
     const PlayerProfile *b = (const PlayerProfile *)right;
@@ -1078,7 +1438,11 @@ void loadLevel(int levelIndex) {
         strcpy(room[row], levels[levelIndex].layout[row]);
 
         for (int col = 0; col < WIDTH; col++) {
-            damagedWalls[row][col] = 0;
+            if (room[row][col] == '#' && ((row * 7 + col * 11 + levelIndex * 13) % 23 == 0)) {
+                damagedWalls[row][col] = 1;
+            } else {
+                damagedWalls[row][col] = 0;
+            }
         }
     }
 
@@ -1088,7 +1452,8 @@ void loadLevel(int levelIndex) {
     guardCount = levels[levelIndex].guardCount;
     for (int i = 0; i < guardCount; i++) {
         guards[i] = levels[levelIndex].startingGuards[i];
-        guardAmmo[i] = GUARD_AMMO;
+        guards[i].lastMoveMs = 0;
+        guardAmmo[i] = guards[i].hard ? GUARD_AMMO + 2 : GUARD_AMMO;
     }
 
     blinkActive = 0;
@@ -1111,6 +1476,14 @@ void resetGame(void) {
     lastPlayerMoveMs = 0;
     lastGuardMoveMs = 0;
     lastEnemyShootMs = 0;
+    inSecretRoom = 0;
+    secretLevelIndex = -1;
+    secretEntranceSide = 1;
+
+    for (int i = 0; i < LEVEL_COUNT; i++) {
+        collectedHatThisLevel[i] = 0;
+    }
+
     loadLevel(0);
 }
 
@@ -1134,14 +1507,21 @@ int guardAtExcept(int row, int col, int exceptionIndex) {
     return 0;
 }
 
-char guardSymbolAt(int row, int col) {
+const char *guardSymbolAt(int row, int col) {
     for (int i = 0; i < guardCount; i++) {
         if (guards[i].row == row && guards[i].col == col) {
-            return guards[i].direction;
+            if (guards[i].hard) {
+                return guards[i].direction == '<' ? "«" : "»";
+            }
+
+            static char symbol[2];
+            symbol[0] = guards[i].direction;
+            symbol[1] = '\0';
+            return symbol;
         }
     }
 
-    return '\0';
+    return "";
 }
 
 int removeGuardAt(int row, int col);
@@ -1225,16 +1605,37 @@ int removeGuardAt(int row, int col) {
     return 0;
 }
 
-void collectSignalIfNeeded(void) {
+void collectItemsIfNeeded(void) {
     if (room[playerRow][playerCol] == '*') {
         if (signalPower < MAX_SIGNAL) {
             signalPower++;
-            strcpy(message, "Signal restored. The cursor burns brighter.");
+            strcpy(message, "Signal restored. Zero burns brighter.");
         } else {
             strcpy(message, "Signal is already full.");
         }
 
         room[playerRow][playerCol] = '.';
+    }
+
+    if (room[playerRow][playerCol] == '?') {
+        int hatIndex = inSecretRoom ? secretLevelIndex : currentLevel;
+        room[playerRow][playerCol] = '.';
+
+        if (hatIndex >= 0 && hatIndex < LEVEL_COUNT) {
+            collectedHatThisLevel[hatIndex] = 1;
+        }
+
+        unlockHatFromPickup(hatIndex);
+
+        if (inSecretRoom) {
+            const char *foundHatSymbol = "?";
+            if (hatIndex >= 0 && hatIndex < HAT_COUNT) {
+                foundHatSymbol = hatSymbols[hatIndex];
+            }
+
+            restoreMainLevelAfterSecret();
+            snprintf(message, sizeof(message), "Zero returns from the hidden room with %s.", foundHatSymbol);
+        }
     }
 }
 
@@ -1266,9 +1667,9 @@ int tryMovePlayer(char command, long long currentMs) {
 
     lastPlayerMoveMs = currentMs;
 
-    if (room[newRow][newCol] == '#') {
+    if (isSolidWallAt(newRow, newCol)) {
         lastMoveCommand = '\0';
-        strcpy(message, "A wall blocks your movement.");
+        strcpy(message, room[newRow][newCol] == 'D' ? "A strange wall blocks your movement." : "A wall blocks your movement.");
         return 0;
     }
 
@@ -1280,7 +1681,7 @@ int tryMovePlayer(char command, long long currentMs) {
             lastMoveCommand = command;
             lastMovePoseMs = currentMs;
             strcpy(message, "The hat deletes the guard on contact.");
-            collectSignalIfNeeded();
+            collectItemsIfNeeded();
             return 1;
         }
 
@@ -1291,13 +1692,19 @@ int tryMovePlayer(char command, long long currentMs) {
 
     playerRow = newRow;
     playerCol = newCol;
+
+    if (!inSecretRoom && room[playerRow][playerCol] == 'S') {
+        enterSecretRoomFromEntrance(playerRow, playerCol);
+        return 1;
+    }
+
     lastMoveCommand = command;
     lastMovePoseMs = currentMs;
-    strcpy(message, "You move through the room.");
-    collectSignalIfNeeded();
+    strcpy(message, "Zero moves through the room.");
+    collectItemsIfNeeded();
 
     if (playerTouchesEnemyBullet()) {
-        killPlayer("You move into a hostile shot.");
+        killPlayer("Zero moves into a hostile shot.");
     }
 
     return 1;
@@ -1373,6 +1780,19 @@ void movePlayerBullet(long long currentMs) {
         int newCol = playerBullets[i].col + colDirection;
         playerBullets[i].lastMoveMs = currentMs;
 
+        if (!isInsideMap(newRow, newCol)) {
+            playerBullets[i].active = 0;
+            continue;
+        }
+
+        if (room[newRow][newCol] == 'D') {
+            room[newRow][newCol] = 'S';
+            damagedWalls[newRow][newCol] = 0;
+            playerBullets[i].active = 0;
+            strcpy(message, "A corridor opens beyond the level edge.");
+            continue;
+        }
+
         if (room[newRow][newCol] == '#') {
             damagedWalls[newRow][newCol] = 1;
             playerBullets[i].active = 0;
@@ -1408,7 +1828,7 @@ void moveEnemyBullets(long long currentMs) {
         int newCol = enemyBullets[i].col + colDirection;
         enemyBullets[i].lastMoveMs = currentMs;
 
-        if (room[newRow][newCol] == '#') {
+        if (isSolidWallAt(newRow, newCol)) {
             enemyBullets[i].active = 0;
             continue;
         }
@@ -1417,7 +1837,7 @@ void moveEnemyBullets(long long currentMs) {
         enemyBullets[i].col = newCol;
 
         if (enemyBullets[i].row == playerRow && enemyBullets[i].col == playerCol) {
-            killPlayer("A hostile shot hits the cursor.");
+            killPlayer("A hostile shot hits Zero.");
             return;
         }
     }
@@ -1436,7 +1856,7 @@ int guardSeesPlayer(void) {
         int visionRow = guards[i].row + rowDirection;
         int visionCol = guards[i].col + colDirection;
 
-        while (room[visionRow][visionCol] != '#') {
+        while (!isSolidWallAt(visionRow, visionCol)) {
             if (visionRow == playerRow && visionCol == playerCol) {
                 return 1;
             }
@@ -1461,7 +1881,7 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
 
         int checkCol = col + step;
         while (checkCol != playerCol) {
-            if (room[row][checkCol] == '#') {
+            if (isSolidWallAt(row, checkCol)) {
                 return 0;
             }
             checkCol += step;
@@ -1479,7 +1899,7 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
 
         int checkRow = row + step;
         while (checkRow != playerRow) {
-            if (room[checkRow][col] == '#') {
+            if (isSolidWallAt(checkRow, col)) {
                 return 0;
             }
             checkRow += step;
@@ -1519,7 +1939,7 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction, long long currentM
     int startRow = guards[guardIndex].row + rowDirection;
     int startCol = guards[guardIndex].col + colDirection;
 
-    if (room[startRow][startCol] == '#') {
+    if (isSolidWallAt(startRow, startCol)) {
         return;
     }
 
@@ -1537,7 +1957,7 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction, long long currentM
     enemyBullets[slot].direction = direction;
     enemyBullets[slot].lastMoveMs = currentMs;
 
-    strcpy(message, "A guard fires. The shot cuts through the room.");
+    strcpy(message, guards[guardIndex].hard ? "A fast guard sprays fire." : "A guard fires. The shot cuts through the room.");
 }
 
 void guardsShootIfPossible(long long currentMs) {
@@ -1546,16 +1966,34 @@ void guardsShootIfPossible(long long currentMs) {
     }
 
     int fired = 0;
+    const char directions[4] = {'^', 'v', '<', '>'};
 
     for (int i = 0; i < guardCount; i++) {
-        char shotDirection = '>';
+        if (guards[i].hard) {
+            for (int d = 0; d < 4; d++) {
+                int ammoBefore = guardAmmo[i];
+                fireEnemyBulletFromGuard(i, directions[d], currentMs);
+                if (guardAmmo[i] < ammoBefore) {
+                    fired = 1;
+                }
 
-        if (guardHasLineOfSightToPlayer(i, &shotDirection)) {
-            fireEnemyBulletFromGuard(i, shotDirection, currentMs);
-            fired = 1;
+                if (playerCaught) {
+                    return;
+                }
+            }
+        } else {
+            char shotDirection = '>';
 
-            if (playerCaught) {
-                return;
+            if (guardHasLineOfSightToPlayer(i, &shotDirection)) {
+                int ammoBefore = guardAmmo[i];
+                fireEnemyBulletFromGuard(i, shotDirection, currentMs);
+                if (guardAmmo[i] < ammoBefore) {
+                    fired = 1;
+                }
+
+                if (playerCaught) {
+                    return;
+                }
             }
         }
     }
@@ -1566,13 +2004,14 @@ void guardsShootIfPossible(long long currentMs) {
 }
 
 void movePatrolGuards(long long currentMs) {
-    if (currentMs - lastGuardMoveMs < GUARD_PATROL_DELAY_MS) {
-        return;
-    }
-
-    lastGuardMoveMs = currentMs;
-
     for (int i = 0; i < guardCount; i++) {
+        long long delay = guards[i].hard ? HARD_GUARD_PATROL_DELAY_MS : GUARD_PATROL_DELAY_MS;
+        if (currentMs - guards[i].lastMoveMs < delay) {
+            continue;
+        }
+
+        guards[i].lastMoveMs = currentMs;
+
         int rowDirection;
         int colDirection;
         getDirection(guards[i].direction, &rowDirection, &colDirection);
@@ -1588,7 +2027,7 @@ void movePatrolGuards(long long currentMs) {
                 continue;
             }
 
-            killPlayer("A guard touches the cursor.");
+            killPlayer("A guard touches Zero.");
             return;
         }
 
@@ -1603,7 +2042,7 @@ void movePatrolGuards(long long currentMs) {
             continue;
         }
 
-        if (room[newRow][newCol] == '#' || room[newRow][newCol] == 'E' || room[newRow][newCol] == '*' || guardAt(newRow, newCol)) {
+        if (isGuardBlockedTile(newRow, newCol) || guardAt(newRow, newCol)) {
             guards[i].direction = reverseDirection(guards[i].direction);
         } else {
             guards[i].row = newRow;
@@ -1625,7 +2064,7 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
             return 1;
         }
 
-        killPlayer("A guard reaches the cursor.");
+        killPlayer("A guard reaches Zero.");
         return 1;
     }
 
@@ -1639,7 +2078,7 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
         return 1;
     }
 
-    if (room[newRow][newCol] == '#' || guardAtExcept(newRow, newCol, guardIndex)) {
+    if (isSolidWallAt(newRow, newCol) || isExitTileAt(newRow, newCol) || room[newRow][newCol] == '?' || guardAtExcept(newRow, newCol, guardIndex)) {
         return 0;
     }
 
@@ -1651,13 +2090,14 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
 }
 
 void moveChasingGuards(long long currentMs) {
-    if (currentMs - lastGuardMoveMs < GUARD_ALERT_DELAY_MS) {
-        return;
-    }
-
-    lastGuardMoveMs = currentMs;
-
     for (int i = 0; i < guardCount; i++) {
+        long long delay = guards[i].hard ? HARD_GUARD_ALERT_DELAY_MS : GUARD_ALERT_DELAY_MS;
+        if (currentMs - guards[i].lastMoveMs < delay) {
+            continue;
+        }
+
+        guards[i].lastMoveMs = currentMs;
+
         int rowDiff = playerRow - guards[i].row;
         int colDiff = playerCol - guards[i].col;
         int rowStep = signOf(rowDiff);
@@ -1689,7 +2129,7 @@ void moveChasingGuards(long long currentMs) {
 }
 
 int reachedExit(void) {
-    return room[playerRow][playerCol] == 'E';
+    return room[playerRow][playerCol] == '[' || room[playerRow][playerCol] == ']';
 }
 
 int advanceLevelIfPossible(void) {
@@ -1787,9 +2227,13 @@ void drawRoomRealtime(void) {
             } else if (enemyBulletAt(row, col)) {
                 printf(":");
             } else if (guardAt(row, col)) {
-                printf("%c", guardSymbolAt(row, col));
-            } else if (room[row][col] == 'E') {
-                printf("[]");
+                printf("%s", guardSymbolAt(row, col));
+            } else if (room[row][col] == '[' || room[row][col] == ']') {
+                printf("%c", room[row][col]);
+            } else if (room[row][col] == 'D') {
+                printf("¦");
+            } else if (room[row][col] == 'S') {
+                printf(".");
             } else if (room[row][col] == '#') {
                 if (damagedWalls[row][col]) {
                     printDamagedWallSymbol(row, col);
@@ -1880,13 +2324,12 @@ int runRealtimeGame(void) {
     if (won) {
         char finishBuffer[32];
         formatTime(finalRunTimeMs, finishBuffer, sizeof(finishBuffer));
-        printf("\nYou reached the final [].\n");
+        printf("\nZero reached the final door.\n");
         printf("Finish time: %s\n", finishBuffer);
-        printf("The terminal loses your signal.\n");
+        printf("The terminal loses Zero's signal.\n");
         printf("You escaped.\n");
         printf("BLINK.\n");
 
-        unlockRandomHat();
         recordGameResult(1, finalRunTimeMs);
         return 1;
     }
