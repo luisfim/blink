@@ -11,9 +11,7 @@
 
 **BLINK** is a real-time terminal stealth game written in C.
 
-You play as **Zero**, a small digital survivor moving through a hostile system of patrols, broken walls, hidden rooms, signal pickups, secret hats, and terminal doors.
-
-Move fast. Hide your signal. Escape before the system deletes you.
+You play as **Zero**, a small digital survivor moving through a hostile system of patrols, broken walls, hidden rooms, signal pickups and terminal doors. Move fast. Hide your signal. Escape before the system deletes you.
 
 ---
 
@@ -27,8 +25,6 @@ Nobody knows exactly who wrote the original version. Some say it was passed arou
 
 This project is a modern recreation of that lost classic.
 
-This version was made by a programming student who loves old games and wanted to recreate the feeling of an 80s terminal challenge while training his skills with the **C language**.
-
 ---
 
 ## Gameplay
@@ -38,13 +34,6 @@ Zero must cross each level and reach the door:
 ```text
 []
 ```
-
-Both `[` and `]` count as the exit.
-
-The game is played in real time. Enemies move, shoot, chase, and react while you move through the map.
-
-The goal is to finish all levels as fast as possible. The local leaderboard records the best completion times for each profile.
-
 ---
 
 ## Controls
@@ -55,29 +44,6 @@ SPACE    Blink
 F        Shoot
 B        Back / abandon run
 Q        Quit from main menu
-```
-
----
-
-## Symbols
-
-```text
-o   Zero
-ó   Zero moving left
-ò   Zero moving right
-ø   Zero deleted
-
-#   Wall, drawn as terminal box art
-¦   Hidden breakable wall
-.   Empty floor
-*   Signal pickup
-?   Hidden hat pickup
-:   Bullet
-~   Piercing wave
-[]  Door / exit
-
-^ > < v   Standard guards
-» «       Advanced guards
 ```
 
 ---
@@ -119,42 +85,9 @@ In alert mode:
 
 ```text
 Enemies chase Zero.
-Enemies shoot when they have line of sight.
+Enemies shoot.
 The room becomes much more dangerous.
 ```
-
----
-
-## Hats
-
-Hats are hidden upgrades. Each level contains a secret wall:
-
-```text
-¦
-```
-
-Shoot it to reveal a hidden passage. Inside the secret room, collect:
-
-```text
-?
-```
-
-Each hidden pickup unlocks one hat.
-
-```text
-ô   Contact Delete
-    Touching guards deletes them instead of killing Zero.
-
-õ   Piercing Wave
-    Zero shoots ~ instead of :.
-    The wave passes through enemies.
-
-ö   Double Shot
-    Zero can have two shots active at the same time.
-```
-
-After collecting a hat, you can equip it immediately during the run.
-
 ---
 
 ## Profiles and Leaderboard
@@ -176,22 +109,12 @@ Unlocked hats
 Selected hat
 ```
 
-Player names can have up to 6 letters.
-
-There is also one hidden name easter egg:
-
-```text
-LAURA -> LAURA♥
-```
-
----
-
 ## Build and Run
 
 Compile with GCC:
 
 ```bash
-gcc -Wall -Wextra -std=c11 blink.c -o blink
+gcc -o blink
 ```
 
 Run:
@@ -217,9 +140,6 @@ Simple AI
 Terminal rendering
 Game loop timing
 ```
-
-The goal was not to make a modern-looking game, but to make something that feels like it could have existed on an old terminal: mysterious, minimal, and competitive.
-
 ---
 
 ## License
