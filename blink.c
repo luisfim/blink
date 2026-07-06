@@ -16,6 +16,7 @@
 #define MAX_SIGNAL 5
 #define GUARD_AMMO 3
 #define MAX_ENEMY_BULLETS 12
+#define MAX_PLAYER_BULLETS 2
 #define HAT_COUNT 3
 #define SAVE_FILE "blink_saves.txt"
 #define PLAYER_NAME_LENGTH 3
@@ -23,6 +24,7 @@
 
 #define BLINK_DURATION_MS 650
 #define PLAYER_MOVE_DELAY_MS 110
+#define MOVE_POSE_DURATION_MS 160
 #define PLAYER_BULLET_DELAY_MS 70
 #define ENEMY_BULLET_DELAY_MS 100
 #define GUARD_PATROL_DELAY_MS 430
@@ -40,13 +42,16 @@
     ø = dead player
 
     Unlockable hats:
-    ô õ ö
+    ô = touch guards to delete them
+    õ = shots become ~ and pierce through guards
+    ö = double shot
 
     Other symbols:
     # = wall internally, drawn as box-drawing symbols
     . = floor
     * = Signal pickup
-    : = bullet, player or enemy
+    : = normal bullet, player or enemy
+    ~ = piercing player bullet while using hat õ
     E = exit, visually representing []
     ^ > < v = guards and their direction
 
@@ -178,11 +183,12 @@ int playerCaught = 0;
 int playerDead = 0;
 int alertMode = 0;
 
-Bullet playerBullet = {0, 0, 0, '>', 0};
+Bullet playerBullets[MAX_PLAYER_BULLETS];
 Bullet enemyBullets[MAX_ENEMY_BULLETS];
 
 char lastDirection = '>';
 char lastMoveCommand = '\0';
+long long lastMovePoseMs = 0;
 char message[180] = "The cursor blinks into existence.";
 
 const char *hatSymbols[HAT_COUNT] = {"ô", "õ", "ö"};
@@ -190,6 +196,13 @@ int unlockedHats[HAT_COUNT] = {0, 0, 0};
 int selectedHat = -1;
 char currentPlayerName[PLAYER_NAME_LENGTH + 1] = "---";
 int hasCurrentPlayer = 0;
+
+int hatActive(int hatIndex) {
+    return selectedHat == hatIndex &&
+           selectedHat >= 0 &&
+           selectedHat < HAT_COUNT &&
+           unlockedHats[selectedHat];
+}
 
 static struct termios originalTermios;
 static int rawModeEnabled = 0;
@@ -389,6 +402,16 @@ const char *getPlayerSymbol(void) {
     }
 
     return "o";
+}
+
+void updatePlayerPose(long long currentMs) {
+    if (lastMoveCommand == '\0') {
+        return;
+    }
+
+    if (currentMs - lastMovePoseMs >= MOVE_POSE_DURATION_MS) {
+        lastMoveCommand = '\0';
+    }
 }
 
 void killPlayer(const char *deathMessage) {
@@ -712,11 +735,21 @@ void showHatMenu(void) {
         printf("0 - no hat: o\n");
 
         for (int i = 0; i < HAT_COUNT; i++) {
-            printf("%d - hat %d: %s [%s]\n",
+            const char *power = "";
+            if (i == 0) {
+                power = "touch guards to delete them";
+            } else if (i == 1) {
+                power = "~ shot pierces guards";
+            } else if (i == 2) {
+                power = "double shot";
+            }
+
+            printf("%d - hat %d: %s [%s] - %s\n",
                    i + 1,
                    i + 1,
                    hatSymbols[i],
-                   unlockedHats[i] ? "unlocked" : "locked");
+                   unlockedHats[i] ? "unlocked" : "locked",
+                   power);
         }
 
         printf("\nPress 0-3 to choose.\n");
@@ -967,6 +1000,13 @@ char directionFromStep(int rowStep, int colStep) {
     return '>';
 }
 
+void clearPlayerBullets(void) {
+    for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+        playerBullets[i].active = 0;
+        playerBullets[i].lastMoveMs = 0;
+    }
+}
+
 void clearEnemyBullets(void) {
     for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
         enemyBullets[i].active = 0;
@@ -998,9 +1038,10 @@ void loadLevel(int levelIndex) {
     playerCaught = 0;
     playerDead = 0;
     alertMode = 0;
-    playerBullet.active = 0;
+    clearPlayerBullets();
     lastDirection = '>';
     lastMoveCommand = '\0';
+    lastMovePoseMs = 0;
     clearEnemyBullets();
     strncpy(message, levels[levelIndex].introMessage, sizeof(message) - 1);
     message[sizeof(message) - 1] = '\0';
@@ -1046,6 +1087,8 @@ char guardSymbolAt(int row, int col) {
     return '\0';
 }
 
+int removeGuardAt(int row, int col);
+
 int enemyBulletAt(int row, int col) {
     for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
         if (enemyBullets[i].active && enemyBullets[i].row == row && enemyBullets[i].col == col) {
@@ -1056,12 +1099,53 @@ int enemyBulletAt(int row, int col) {
     return 0;
 }
 
-int bulletAt(int row, int col) {
-    if (playerBullet.active && playerBullet.row == row && playerBullet.col == col) {
-        return 1;
+int playerBulletAt(int row, int col) {
+    for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+        if (playerBullets[i].active && playerBullets[i].row == row && playerBullets[i].col == col) {
+            return 1;
+        }
     }
 
-    return enemyBulletAt(row, col);
+    return 0;
+}
+
+int bulletAt(int row, int col) {
+    return playerBulletAt(row, col) || enemyBulletAt(row, col);
+}
+
+int findPlayerBulletSlot(void) {
+    int maxBullets = hatActive(2) ? MAX_PLAYER_BULLETS : 1;
+
+    for (int i = 0; i < maxBullets; i++) {
+        if (!playerBullets[i].active) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+void deactivatePlayerBulletAt(int row, int col) {
+    for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+        if (playerBullets[i].active && playerBullets[i].row == row && playerBullets[i].col == col) {
+            playerBullets[i].active = 0;
+            return;
+        }
+    }
+}
+
+int handleGuardHitByPlayerBulletAt(int row, int col) {
+    if (!playerBulletAt(row, col)) {
+        return 0;
+    }
+
+    if (!hatActive(1)) {
+        deactivatePlayerBulletAt(row, col);
+    }
+
+    removeGuardAt(row, col);
+    strcpy(message, hatActive(1) ? "The wave cuts through a guard." : "The shot deletes a guard.");
+    return 1;
 }
 
 void removeGuardByIndex(int index) {
@@ -1125,23 +1209,41 @@ int tryMovePlayer(char command, long long currentMs) {
 
     lastPlayerMoveMs = currentMs;
 
-    if (room[newRow][newCol] != '#' && !guardAt(newRow, newCol)) {
-        playerRow = newRow;
-        playerCol = newCol;
-        lastMoveCommand = command;
-        strcpy(message, "You move through the room.");
-        collectSignalIfNeeded();
-
-        if (playerTouchesEnemyBullet()) {
-            killPlayer("You move into a hostile shot.");
-        }
-
-        return 1;
+    if (room[newRow][newCol] == '#') {
+        lastMoveCommand = '\0';
+        strcpy(message, "A wall blocks your movement.");
+        return 0;
     }
 
-    lastMoveCommand = '\0';
-    strcpy(message, "A wall blocks your movement.");
-    return 0;
+    if (guardAt(newRow, newCol)) {
+        if (hatActive(0)) {
+            removeGuardAt(newRow, newCol);
+            playerRow = newRow;
+            playerCol = newCol;
+            lastMoveCommand = command;
+            lastMovePoseMs = currentMs;
+            strcpy(message, "The hat deletes the guard on contact.");
+            collectSignalIfNeeded();
+            return 1;
+        }
+
+        lastMoveCommand = '\0';
+        strcpy(message, "A guard blocks your movement.");
+        return 0;
+    }
+
+    playerRow = newRow;
+    playerCol = newCol;
+    lastMoveCommand = command;
+    lastMovePoseMs = currentMs;
+    strcpy(message, "You move through the room.");
+    collectSignalIfNeeded();
+
+    if (playerTouchesEnemyBullet()) {
+        killPlayer("You move into a hostile shot.");
+    }
+
+    return 1;
 }
 
 void activateBlink(long long currentMs) {
@@ -1170,8 +1272,10 @@ void updateBlink(long long currentMs) {
 }
 
 void firePlayerBullet(long long currentMs) {
-    if (playerBullet.active) {
-        strcpy(message, "Only one shot can exist at a time.");
+    int slot = findPlayerBulletSlot();
+
+    if (slot == -1) {
+        strcpy(message, hatActive(2) ? "Both shots are already active." : "Only one shot can exist at a time.");
         return;
     }
 
@@ -1183,41 +1287,53 @@ void firePlayerBullet(long long currentMs) {
     signalPower--;
     lastMoveCommand = '\0';
 
-    playerBullet.active = 1;
-    playerBullet.row = playerRow;
-    playerBullet.col = playerCol;
-    playerBullet.direction = lastDirection;
-    playerBullet.lastMoveMs = currentMs;
+    playerBullets[slot].active = 1;
+    playerBullets[slot].row = playerRow;
+    playerBullets[slot].col = playerCol;
+    playerBullets[slot].direction = lastDirection;
+    playerBullets[slot].lastMoveMs = currentMs;
 
-    strcpy(message, "You spend 1 Signal and fire a thin pulse.");
+    if (hatActive(1)) {
+        strcpy(message, "You fire a piercing wave.");
+    } else if (hatActive(2)) {
+        strcpy(message, "You fire one of two pulses.");
+    } else {
+        strcpy(message, "You spend 1 Signal and fire a thin pulse.");
+    }
 }
 
 void movePlayerBullet(long long currentMs) {
-    if (!playerBullet.active || currentMs - playerBullet.lastMoveMs < PLAYER_BULLET_DELAY_MS) {
-        return;
-    }
+    for (int i = 0; i < MAX_PLAYER_BULLETS; i++) {
+        if (!playerBullets[i].active || currentMs - playerBullets[i].lastMoveMs < PLAYER_BULLET_DELAY_MS) {
+            continue;
+        }
 
-    int rowDirection;
-    int colDirection;
-    getDirection(playerBullet.direction, &rowDirection, &colDirection);
+        int rowDirection;
+        int colDirection;
+        getDirection(playerBullets[i].direction, &rowDirection, &colDirection);
 
-    int newRow = playerBullet.row + rowDirection;
-    int newCol = playerBullet.col + colDirection;
-    playerBullet.lastMoveMs = currentMs;
+        int newRow = playerBullets[i].row + rowDirection;
+        int newCol = playerBullets[i].col + colDirection;
+        playerBullets[i].lastMoveMs = currentMs;
 
-    if (room[newRow][newCol] == '#') {
-        damagedWalls[newRow][newCol] = 1;
-        playerBullet.active = 0;
-        strcpy(message, "The shot scars the wall.");
-        return;
-    }
+        if (room[newRow][newCol] == '#') {
+            damagedWalls[newRow][newCol] = 1;
+            playerBullets[i].active = 0;
+            strcpy(message, hatActive(1) ? "The wave breaks against a wall." : "The shot scars the wall.");
+            continue;
+        }
 
-    playerBullet.row = newRow;
-    playerBullet.col = newCol;
+        playerBullets[i].row = newRow;
+        playerBullets[i].col = newCol;
 
-    if (removeGuardAt(playerBullet.row, playerBullet.col)) {
-        playerBullet.active = 0;
-        strcpy(message, "The shot deletes a guard.");
+        if (removeGuardAt(playerBullets[i].row, playerBullets[i].col)) {
+            if (!hatActive(1)) {
+                playerBullets[i].active = 0;
+                strcpy(message, "The shot deletes a guard.");
+            } else {
+                strcpy(message, "The wave pierces through a guard.");
+            }
+        }
     }
 }
 
@@ -1408,15 +1524,25 @@ void movePatrolGuards(long long currentMs) {
         int newCol = guards[i].col + colDirection;
 
         if (newRow == playerRow && newCol == playerCol) {
+            if (hatActive(0)) {
+                removeGuardByIndex(i);
+                i--;
+                strcpy(message, "The hat deletes a guard on contact.");
+                continue;
+            }
+
             killPlayer("A guard touches the cursor.");
             return;
         }
 
-        if (playerBullet.active && newRow == playerBullet.row && newCol == playerBullet.col) {
-            playerBullet.active = 0;
+        if (playerBulletAt(newRow, newCol)) {
+            if (!hatActive(1)) {
+                deactivatePlayerBulletAt(newRow, newCol);
+            }
+
             removeGuardByIndex(i);
             i--;
-            strcpy(message, "A guard walks into your shot.");
+            strcpy(message, hatActive(1) ? "A guard walks into the wave." : "A guard walks into your shot.");
             continue;
         }
 
@@ -1435,7 +1561,24 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
 
     if (newRow == playerRow && newCol == playerCol) {
         guards[guardIndex].direction = directionFromStep(rowStep, colStep);
+
+        if (hatActive(0)) {
+            removeGuardByIndex(guardIndex);
+            strcpy(message, "The hat deletes a chasing guard.");
+            return 1;
+        }
+
         killPlayer("A guard reaches the cursor.");
+        return 1;
+    }
+
+    if (playerBulletAt(newRow, newCol)) {
+        if (!hatActive(1)) {
+            deactivatePlayerBulletAt(newRow, newCol);
+        }
+
+        removeGuardByIndex(guardIndex);
+        strcpy(message, hatActive(1) ? "A chasing guard hits the wave." : "A chasing guard hits your shot.");
         return 1;
     }
 
@@ -1559,6 +1702,17 @@ void drawRoomRealtime(void) {
 
     printf("State:      %s\n", blinkActive ? "BLINKING" : "VISIBLE");
     printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
+
+    if (hatActive(0)) {
+        printf("Hat:        ô CONTACT DELETE\n");
+    } else if (hatActive(1)) {
+        printf("Hat:        õ PIERCING WAVE\n");
+    } else if (hatActive(2)) {
+        printf("Hat:        ö DOUBLE SHOT\n");
+    } else {
+        printf("Hat:        none\n");
+    }
+
     printf("Facing:     %c\n\n", lastDirection);
 
     for (int row = 0; row < HEIGHT; row++) {
@@ -1571,7 +1725,9 @@ void drawRoomRealtime(void) {
                 } else {
                     printf("%s", getPlayerSymbol());
                 }
-            } else if (bulletAt(row, col)) {
+            } else if (playerBulletAt(row, col)) {
+                printf("%s", hatActive(1) ? "~" : ":");
+            } else if (enemyBulletAt(row, col)) {
                 printf(":");
             } else if (guardAt(row, col)) {
                 printf("%c", guardSymbolAt(row, col));
@@ -1633,6 +1789,7 @@ int runRealtimeGame(void) {
 
         handleGameplayInput(currentMs, &quitRun);
         updateWorld(currentMs);
+        updatePlayerPose(currentMs);
 
         if (reachedExit()) {
             if (advanceLevelIfPossible()) {
