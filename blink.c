@@ -1,8 +1,13 @@
+#define _POSIX_C_SOURCE 200809L
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 #include <time.h>
+#include <termios.h>
+#include <unistd.h>
+#include <sys/select.h>
 
 #define HEIGHT 9
 #define WIDTH 20
@@ -12,9 +17,21 @@
 #define GUARD_AMMO 3
 #define MAX_ENEMY_BULLETS 12
 #define HAT_COUNT 3
+#define SAVE_FILE "blink_saves.txt"
+#define PLAYER_NAME_LENGTH 3
+#define MAX_PROFILES 100
+
+#define BLINK_DURATION_MS 650
+#define PLAYER_MOVE_DELAY_MS 110
+#define PLAYER_BULLET_DELAY_MS 70
+#define ENEMY_BULLET_DELAY_MS 100
+#define GUARD_PATROL_DELAY_MS 430
+#define GUARD_ALERT_DELAY_MS 210
+#define ENEMY_SHOOT_DELAY_MS 520
+#define FRAME_DELAY_MS 33
 
 /*
-    BLINK v0.1
+    BLINK - real-time terminal version
 
     Player symbols:
     o = idle player
@@ -29,17 +46,15 @@
     # = wall internally, drawn as box-drawing symbols
     . = floor
     * = Signal pickup
-    : = bullet
+    : = bullet, player or enemy
     E = exit, visually representing []
     ^ > < v = guards and their direction
 
-    Controls:
-    W A S D = move
-    .       = wait
-    SPACE   = blink for one hidden action
+    During gameplay:
+    W A S D = move without Enter
+    SPACE   = blink for a short hidden duration
     F       = shoot in last movement direction
-    H       = hats menu
-    Q       = quit
+    Q       = quit run
 */
 
 typedef struct {
@@ -53,6 +68,7 @@ typedef struct {
     int row;
     int col;
     char direction;
+    long long lastMoveMs;
 } Bullet;
 
 typedef struct {
@@ -63,6 +79,15 @@ typedef struct {
     Guard startingGuards[MAX_GUARDS];
     char introMessage[160];
 } Level;
+
+typedef struct {
+    char name[PLAYER_NAME_LENGTH + 1];
+    int wins;
+    int deaths;
+    long long bestTimeMs;
+    int selectedHat;
+    int unlockedHats[HAT_COUNT];
+} PlayerProfile;
 
 Level levels[LEVEL_COUNT] = {
     {
@@ -141,40 +166,110 @@ int damagedWalls[HEIGHT][WIDTH];
 
 Guard guards[MAX_GUARDS];
 int guardAmmo[MAX_GUARDS];
-
-int currentLevel = 0;
 int guardCount = 0;
+int currentLevel = 0;
 
 int playerRow = 1;
 int playerCol = 1;
-
 int signalPower = 3;
-int holdBlink = 0;
+int blinkActive = 0;
+long long blinkEndMs = 0;
 int playerCaught = 0;
 int playerDead = 0;
 int alertMode = 0;
 
-int bulletActive = 0;
-int bulletRow = 0;
-int bulletCol = 0;
-char bulletDirection = '>';
+Bullet playerBullet = {0, 0, 0, '>', 0};
+Bullet enemyBullets[MAX_ENEMY_BULLETS];
+
 char lastDirection = '>';
 char lastMoveCommand = '\0';
-
-Bullet enemyBullets[MAX_ENEMY_BULLETS];
+char message[180] = "The cursor blinks into existence.";
 
 const char *hatSymbols[HAT_COUNT] = {"ô", "õ", "ö"};
 int unlockedHats[HAT_COUNT] = {0, 0, 0};
 int selectedHat = -1;
+char currentPlayerName[PLAYER_NAME_LENGTH + 1] = "---";
+int hasCurrentPlayer = 0;
 
-char message[160] = "The cursor blinks into existence.";
+static struct termios originalTermios;
+static int rawModeEnabled = 0;
+
+long long runStartMs = 0;
+long long finalRunTimeMs = 0;
+long long lastPlayerMoveMs = 0;
+long long lastGuardMoveMs = 0;
+long long lastEnemyShootMs = 0;
+
+long long nowMs(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+}
+
+void sleepMs(int ms) {
+    struct timespec req;
+    req.tv_sec = ms / 1000;
+    req.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&req, NULL);
+}
+
+void disableRawMode(void) {
+    if (rawModeEnabled) {
+        tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
+        printf("\033[?25h");
+        fflush(stdout);
+        rawModeEnabled = 0;
+    }
+}
+
+void enableRawMode(void) {
+    if (rawModeEnabled) {
+        return;
+    }
+
+    tcgetattr(STDIN_FILENO, &originalTermios);
+
+    struct termios raw = originalTermios;
+    raw.c_lflag &= (tcflag_t) ~(ECHO | ICANON);
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+    printf("\033[?25l");
+    fflush(stdout);
+    rawModeEnabled = 1;
+}
+
+int keyAvailable(void) {
+    struct timeval tv;
+    fd_set readfds;
+
+    tv.tv_sec = 0;
+    tv.tv_usec = 0;
+
+    FD_ZERO(&readfds);
+    FD_SET(STDIN_FILENO, &readfds);
+
+    return select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0;
+}
+
+int readKey(void) {
+    unsigned char c;
+    if (read(STDIN_FILENO, &c, 1) == 1) {
+        return c;
+    }
+
+    return -1;
+}
 
 void clearScreen(void) {
-#ifdef _WIN32
-    system("cls");
-#else
-    system("clear");
-#endif
+    printf("\033[H\033[J");
+}
+
+void waitForEnter(void) {
+    char input[16];
+    printf("\nPress ENTER to continue.");
+    fgets(input, sizeof(input), stdin);
 }
 
 int signOf(int value) {
@@ -187,6 +282,19 @@ int signOf(int value) {
     }
 
     return 0;
+}
+
+void formatTime(long long ms, char *buffer, size_t bufferSize) {
+    if (ms < 0) {
+        snprintf(buffer, bufferSize, "--:--.---");
+        return;
+    }
+
+    long long minutes = ms / 60000LL;
+    long long seconds = (ms % 60000LL) / 1000LL;
+    long long millis = ms % 1000LL;
+
+    snprintf(buffer, bufferSize, "%02lld:%02lld.%03lld", minutes, seconds, millis);
 }
 
 int isWallAt(int row, int col) {
@@ -276,7 +384,7 @@ const char *getPlayerSymbol(void) {
         return "ó";
     }
 
-    if (selectedHat >= 0 && unlockedHats[selectedHat]) {
+    if (selectedHat >= 0 && selectedHat < HAT_COUNT && unlockedHats[selectedHat]) {
         return hatSymbols[selectedHat];
     }
 
@@ -286,41 +394,321 @@ const char *getPlayerSymbol(void) {
 void killPlayer(const char *deathMessage) {
     playerCaught = 1;
     playerDead = 1;
-    strcpy(message, deathMessage);
+    strncpy(message, deathMessage, sizeof(message) - 1);
+    message[sizeof(message) - 1] = '\0';
 }
 
-char directionFromStep(int rowStep, int colStep) {
-    if (rowStep < 0) {
-        return '^';
+void normalizePlayerName(char *name) {
+    for (int i = 0; i < PLAYER_NAME_LENGTH; i++) {
+        name[i] = (char) toupper((unsigned char) name[i]);
     }
 
-    if (rowStep > 0) {
-        return 'v';
-    }
-
-    if (colStep < 0) {
-        return '<';
-    }
-
-    if (colStep > 0) {
-        return '>';
-    }
-
-    return '>';
+    name[PLAYER_NAME_LENGTH] = '\0';
 }
 
-void showHatMenu(void) {
-    char input[20];
+int isValidPlayerName(const char *name) {
+    for (int i = 0; i < PLAYER_NAME_LENGTH; i++) {
+        if (!isalpha((unsigned char) name[i])) {
+            return 0;
+        }
+    }
+
+    return 1;
+}
+
+void createDefaultProfile(PlayerProfile *profile, const char *name) {
+    strcpy(profile->name, name);
+    profile->wins = 0;
+    profile->deaths = 0;
+    profile->bestTimeMs = -1;
+    profile->selectedHat = -1;
+
+    for (int i = 0; i < HAT_COUNT; i++) {
+        profile->unlockedHats[i] = 0;
+    }
+}
+
+void applyProfileToGame(PlayerProfile *profile) {
+    strcpy(currentPlayerName, profile->name);
+    hasCurrentPlayer = 1;
+
+    selectedHat = profile->selectedHat;
+
+    for (int i = 0; i < HAT_COUNT; i++) {
+        unlockedHats[i] = profile->unlockedHats[i];
+    }
+
+    if (selectedHat < 0 || selectedHat >= HAT_COUNT || !unlockedHats[selectedHat]) {
+        selectedHat = -1;
+    }
+}
+
+void copyGameToProfile(PlayerProfile *profile) {
+    strcpy(profile->name, currentPlayerName);
+    profile->selectedHat = selectedHat;
+
+    for (int i = 0; i < HAT_COUNT; i++) {
+        profile->unlockedHats[i] = unlockedHats[i];
+    }
+}
+
+int readProfiles(PlayerProfile profiles[], int *profileCount) {
+    FILE *file = fopen(SAVE_FILE, "r");
+    *profileCount = 0;
+
+    if (file == NULL) {
+        return 0;
+    }
+
+    while (*profileCount < MAX_PROFILES) {
+        PlayerProfile profile;
+        int valuesRead = fscanf(
+            file,
+            "%3s %d %d %lld %d %d %d %d",
+            profile.name,
+            &profile.wins,
+            &profile.deaths,
+            &profile.bestTimeMs,
+            &profile.selectedHat,
+            &profile.unlockedHats[0],
+            &profile.unlockedHats[1],
+            &profile.unlockedHats[2]
+        );
+
+        if (valuesRead != 8) {
+            break;
+        }
+
+        profile.name[PLAYER_NAME_LENGTH] = '\0';
+        profiles[*profileCount] = profile;
+        (*profileCount)++;
+    }
+
+    fclose(file);
+    return 1;
+}
+
+int writeProfiles(PlayerProfile profiles[], int profileCount) {
+    FILE *file = fopen(SAVE_FILE, "w");
+
+    if (file == NULL) {
+        return 0;
+    }
+
+    for (int i = 0; i < profileCount; i++) {
+        fprintf(
+            file,
+            "%s %d %d %lld %d %d %d %d\n",
+            profiles[i].name,
+            profiles[i].wins,
+            profiles[i].deaths,
+            profiles[i].bestTimeMs,
+            profiles[i].selectedHat,
+            profiles[i].unlockedHats[0],
+            profiles[i].unlockedHats[1],
+            profiles[i].unlockedHats[2]
+        );
+    }
+
+    fclose(file);
+    return 1;
+}
+
+int findProfileIndex(PlayerProfile profiles[], int profileCount, const char *name) {
+    for (int i = 0; i < profileCount; i++) {
+        if (strcmp(profiles[i].name, name) == 0) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+void saveCurrentProfile(void) {
+    if (!hasCurrentPlayer) {
+        return;
+    }
+
+    PlayerProfile profiles[MAX_PROFILES];
+    int profileCount;
+    readProfiles(profiles, &profileCount);
+
+    int index = findProfileIndex(profiles, profileCount, currentPlayerName);
+
+    if (index == -1) {
+        if (profileCount >= MAX_PROFILES) {
+            return;
+        }
+
+        createDefaultProfile(&profiles[profileCount], currentPlayerName);
+        index = profileCount;
+        profileCount++;
+    }
+
+    copyGameToProfile(&profiles[index]);
+    writeProfiles(profiles, profileCount);
+}
+
+void loadOrCreateProfile(const char *name) {
+    PlayerProfile profiles[MAX_PROFILES];
+    int profileCount;
+    readProfiles(profiles, &profileCount);
+
+    int index = findProfileIndex(profiles, profileCount, name);
+
+    if (index == -1) {
+        if (profileCount >= MAX_PROFILES) {
+            return;
+        }
+
+        createDefaultProfile(&profiles[profileCount], name);
+        index = profileCount;
+        profileCount++;
+        writeProfiles(profiles, profileCount);
+    }
+
+    applyProfileToGame(&profiles[index]);
+}
+
+void recordGameResult(int won, long long finishTimeMs) {
+    if (!hasCurrentPlayer) {
+        return;
+    }
+
+    PlayerProfile profiles[MAX_PROFILES];
+    int profileCount;
+    readProfiles(profiles, &profileCount);
+
+    int index = findProfileIndex(profiles, profileCount, currentPlayerName);
+
+    if (index == -1) {
+        if (profileCount >= MAX_PROFILES) {
+            return;
+        }
+
+        createDefaultProfile(&profiles[profileCount], currentPlayerName);
+        index = profileCount;
+        profileCount++;
+    }
+
+    if (won) {
+        profiles[index].wins++;
+
+        if (profiles[index].bestTimeMs < 0 || finishTimeMs < profiles[index].bestTimeMs) {
+            profiles[index].bestTimeMs = finishTimeMs;
+        }
+    } else {
+        profiles[index].deaths++;
+    }
+
+    copyGameToProfile(&profiles[index]);
+    writeProfiles(profiles, profileCount);
+}
+
+void deleteCurrentProfile(void) {
+    if (!hasCurrentPlayer) {
+        return;
+    }
+
+    PlayerProfile profiles[MAX_PROFILES];
+    int profileCount;
+    readProfiles(profiles, &profileCount);
+
+    int index = findProfileIndex(profiles, profileCount, currentPlayerName);
+
+    if (index == -1) {
+        return;
+    }
+
+    for (int i = index; i < profileCount - 1; i++) {
+        profiles[i] = profiles[i + 1];
+    }
+
+    profileCount--;
+    writeProfiles(profiles, profileCount);
+
+    strcpy(currentPlayerName, "---");
+    hasCurrentPlayer = 0;
+    selectedHat = -1;
+
+    for (int i = 0; i < HAT_COUNT; i++) {
+        unlockedHats[i] = 0;
+    }
+}
+
+void askForPlayerName(void) {
+    char input[32];
 
     while (1) {
         clearScreen();
+        printf("╔══════════════════════╗\n");
+        printf("║     PLAYER NAME      ║\n");
+        printf("╚══════════════════════╝\n\n");
+        printf("Enter 3 letters, arcade style.\n");
+        printf("Example: LUF, AAA, XYZ\n\n");
+        printf("Name: ");
 
-        printf("========================\n");
-        printf("       BLINK HATS\n");
-        printf("========================\n\n");
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return;
+        }
 
-        printf("Current player: %s\n\n", getPlayerSymbol());
+        input[strcspn(input, "\n")] = '\0';
 
+        if (strlen(input) != PLAYER_NAME_LENGTH) {
+            continue;
+        }
+
+        normalizePlayerName(input);
+
+        if (!isValidPlayerName(input)) {
+            continue;
+        }
+
+        loadOrCreateProfile(input);
+        return;
+    }
+}
+
+void showProfileMenu(void) {
+    char input[32];
+
+    while (1) {
+        clearScreen();
+        printf("╔══════════════════════╗\n");
+        printf("║    BLINK PROFILE     ║\n");
+        printf("╚══════════════════════╝\n\n");
+        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
+        printf("C - create/load profile\n");
+        printf("D - delete current profile\n");
+        printf("B - back\n\n");
+        printf("Command: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return;
+        }
+
+        char command = (char)tolower((unsigned char)input[0]);
+
+        if (command == 'c') {
+            askForPlayerName();
+        } else if (command == 'd') {
+            deleteCurrentProfile();
+        } else if (command == 'b') {
+            return;
+        }
+    }
+}
+
+void showHatMenu(void) {
+    char input[32];
+
+    while (1) {
+        clearScreen();
+        printf("╔══════════════════════╗\n");
+        printf("║      BLINK HATS      ║\n");
+        printf("╚══════════════════════╝\n\n");
+        printf("Current player: %s\n", getPlayerSymbol());
+        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
         printf("0 - no hat: o\n");
 
         for (int i = 0; i < HAT_COUNT; i++) {
@@ -339,7 +727,7 @@ void showHatMenu(void) {
             return;
         }
 
-        char command = tolower(input[0]);
+        char command = (char)tolower((unsigned char)input[0]);
 
         if (command == 'b') {
             return;
@@ -347,6 +735,7 @@ void showHatMenu(void) {
 
         if (command == '0') {
             selectedHat = -1;
+            saveCurrentProfile();
             return;
         }
 
@@ -355,6 +744,7 @@ void showHatMenu(void) {
 
             if (unlockedHats[hatIndex]) {
                 selectedHat = hatIndex;
+                saveCurrentProfile();
                 return;
             }
         }
@@ -382,80 +772,137 @@ void unlockRandomHat(void) {
 
     unlockedHats[hatIndex] = 1;
     selectedHat = hatIndex;
+    saveCurrentProfile();
 
     printf("\nNew hat unlocked: %s\n", hatSymbols[hatIndex]);
     printf("It has been equipped for the next run.\n");
 }
 
+int compareProfilesForLeaderboard(const void *left, const void *right) {
+    const PlayerProfile *a = (const PlayerProfile *)left;
+    const PlayerProfile *b = (const PlayerProfile *)right;
+
+    if (a->bestTimeMs < 0 && b->bestTimeMs >= 0) {
+        return 1;
+    }
+
+    if (a->bestTimeMs >= 0 && b->bestTimeMs < 0) {
+        return -1;
+    }
+
+    if (a->bestTimeMs >= 0 && b->bestTimeMs >= 0) {
+        if (a->bestTimeMs < b->bestTimeMs) {
+            return -1;
+        }
+
+        if (a->bestTimeMs > b->bestTimeMs) {
+            return 1;
+        }
+    }
+
+    if (a->wins != b->wins) {
+        return b->wins - a->wins;
+    }
+
+    if (a->deaths != b->deaths) {
+        return a->deaths - b->deaths;
+    }
+
+    return strcmp(a->name, b->name);
+}
+
+void showLeaderboard(void) {
+    PlayerProfile profiles[MAX_PROFILES];
+    int profileCount = 0;
+    char formattedTime[32];
+
+    readProfiles(profiles, &profileCount);
+    qsort(profiles, (size_t)profileCount, sizeof(PlayerProfile), compareProfilesForLeaderboard);
+
+    clearScreen();
+    printf("╔══════════════════════════════════╗\n");
+    printf("║            LEADERBOARD           ║\n");
+    printf("╚══════════════════════════════════╝\n\n");
+
+    printf("Ranked by fastest completed run.\n\n");
+    printf("RK  NAM  BEST TIME  WINS  DEATHS\n");
+    printf("--  ---  ---------  ----  ------\n");
+
+    for (int i = 0; i < profileCount && i < 10; i++) {
+        formatTime(profiles[i].bestTimeMs, formattedTime, sizeof(formattedTime));
+        printf("%2d  %-3s  %9s  %4d  %6d\n",
+               i + 1,
+               profiles[i].name,
+               formattedTime,
+               profiles[i].wins,
+               profiles[i].deaths);
+    }
+
+    if (profileCount == 0) {
+        printf("No local profiles yet.\n");
+    }
+
+    waitForEnter();
+}
+
 int showTitleScreen(void) {
-    char input[20];
+    char input[32];
 
     while (1) {
         clearScreen();
-
-        printf("========================\n");
-        printf("         BLINK\n");
-        printf("========================\n\n");
-
-        printf("Current player: %s\n\n", getPlayerSymbol());
-
-        printf("You are the cursor.\n\n");
-        printf("When you appear,\n");
-        printf("they can see you.\n\n");
-        printf("Use Blink to vanish\n");
-        printf("for one hidden action.\n\n");
-
-        printf("If you are spotted, the room enters ALERT.\n");
-        printf("Every guard starts chasing and firing.\n\n");
-
-        printf("Reach [] without being deleted.\n\n");
-
-        printf("Controls:\n");
-        printf("W A S D  - move\n");
-        printf(".        - wait\n");
-        printf("SPACE    - blink for one hidden action\n");
-        printf("F        - shoot in your last direction\n");
-        printf("H        - hats\n");
-        printf("Q        - quit\n\n");
-
-        printf("Press ENTER to start.\n");
-        printf("Press H and ENTER to change hats.\n");
-        printf("Press Q and ENTER to quit.\n\n");
-
+        printf("╔════════════════════════════════╗\n");
+        printf("║  ██████╗ ██╗     ██╗███╗   ██╗██╗  ██╗ ║\n");
+        printf("║  ██╔══██╗██║     ██║████╗  ██║██║ ██╔╝ ║\n");
+        printf("║  ██████╔╝██║     ██║██╔██╗ ██║█████╔╝  ║\n");
+        printf("║  ██╔══██╗██║     ██║██║╚██╗██║██╔═██╗  ║\n");
+        printf("║  ██████╔╝███████╗██║██║ ╚████║██║  ██╗ ║\n");
+        printf("║  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ║\n");
+        printf("╚════════════════════════════════╝\n\n");
+        printf("Current player: %s\n", getPlayerSymbol());
+        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
+        printf("N - new run\n");
+        printf("P - profile\n");
+        printf("H - hats\n");
+        printf("L - leaderboard\n");
+        printf("Q - quit\n\n");
         printf("Command: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return 0;
         }
 
-        char command = tolower(input[0]);
+        char command = (char)tolower((unsigned char)input[0]);
 
         if (command == 'q') {
             return 0;
         }
 
-        if (command == 'h') {
-            showHatMenu();
+        if (command == 'n' || command == '\n') {
+            return 1;
         }
 
-        if (command == '\n') {
-            return 1;
+        if (command == 'p') {
+            showProfileMenu();
+        } else if (command == 'h') {
+            showHatMenu();
+        } else if (command == 'l') {
+            showLeaderboard();
         }
     }
 }
 
 int askRestart(void) {
-    char input[20];
+    char input[32];
 
     while (1) {
-        printf("\nPress R to restart, H to change hats, or Q to quit.\n");
+        printf("\nR - restart | H - hats | L - leaderboard | Q - quit\n");
         printf("Command: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return 0;
         }
 
-        char command = tolower(input[0]);
+        char command = (char)tolower((unsigned char)input[0]);
 
         if (command == 'r') {
             return 1;
@@ -463,9 +910,9 @@ int askRestart(void) {
 
         if (command == 'h') {
             showHatMenu();
-        }
-
-        if (command == 'q') {
+        } else if (command == 'l') {
+            showLeaderboard();
+        } else if (command == 'q') {
             return 0;
         }
     }
@@ -486,9 +933,44 @@ void getDirection(char direction, int *rowDirection, int *colDirection) {
     }
 }
 
+char reverseDirection(char direction) {
+    if (direction == '^') {
+        return 'v';
+    } else if (direction == 'v') {
+        return '^';
+    } else if (direction == '<') {
+        return '>';
+    } else if (direction == '>') {
+        return '<';
+    }
+
+    return direction;
+}
+
+char directionFromStep(int rowStep, int colStep) {
+    if (rowStep < 0) {
+        return '^';
+    }
+
+    if (rowStep > 0) {
+        return 'v';
+    }
+
+    if (colStep < 0) {
+        return '<';
+    }
+
+    if (colStep > 0) {
+        return '>';
+    }
+
+    return '>';
+}
+
 void clearEnemyBullets(void) {
     for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
         enemyBullets[i].active = 0;
+        enemyBullets[i].lastMoveMs = 0;
     }
 }
 
@@ -512,19 +994,25 @@ void loadLevel(int levelIndex) {
         guardAmmo[i] = GUARD_AMMO;
     }
 
-    holdBlink = 0;
+    blinkActive = 0;
     playerCaught = 0;
     playerDead = 0;
     alertMode = 0;
-    bulletActive = 0;
+    playerBullet.active = 0;
     lastDirection = '>';
     lastMoveCommand = '\0';
     clearEnemyBullets();
-    strcpy(message, levels[levelIndex].introMessage);
+    strncpy(message, levels[levelIndex].introMessage, sizeof(message) - 1);
+    message[sizeof(message) - 1] = '\0';
 }
 
 void resetGame(void) {
     signalPower = 3;
+    runStartMs = nowMs();
+    finalRunTimeMs = 0;
+    lastPlayerMoveMs = 0;
+    lastGuardMoveMs = 0;
+    lastEnemyShootMs = 0;
     loadLevel(0);
 }
 
@@ -569,25 +1057,11 @@ int enemyBulletAt(int row, int col) {
 }
 
 int bulletAt(int row, int col) {
-    if (bulletActive && bulletRow == row && bulletCol == col) {
+    if (playerBullet.active && playerBullet.row == row && playerBullet.col == col) {
         return 1;
     }
 
     return enemyBulletAt(row, col);
-}
-
-char reverseDirection(char direction) {
-    if (direction == '^') {
-        return 'v';
-    } else if (direction == 'v') {
-        return '^';
-    } else if (direction == '<') {
-        return '>';
-    } else if (direction == '>') {
-        return '<';
-    }
-
-    return direction;
 }
 
 void removeGuardByIndex(int index) {
@@ -610,61 +1084,6 @@ int removeGuardAt(int row, int col) {
     return 0;
 }
 
-void drawRoom(void) {
-    clearScreen();
-
-    printf("========================\n");
-    printf("         BLINK\n");
-    printf("========================\n\n");
-
-    printf("Room:       %d/%d\n", currentLevel + 1, LEVEL_COUNT);
-
-    if (alertMode) {
-        printf("Mode:       ALERT - THEY KNOW WHERE YOU ARE\n");
-    } else {
-        printf("Mode:       CALM\n");
-    }
-
-    printf("State:      %s\n", holdBlink ? "BLINKING" : "VISIBLE");
-    printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
-    printf("Blink:      %s\n", holdBlink ? "ACTIVE" : "OFF");
-    printf("Facing:     %c\n\n", lastDirection);
-
-    for (int row = 0; row < HEIGHT; row++) {
-        for (int col = 0; col < WIDTH; col++) {
-            if (row == playerRow && col == playerCol) {
-                if (playerDead) {
-                    printf("%s", getPlayerSymbol());
-                } else if (holdBlink) {
-                    printf(" ");
-                } else {
-                    printf("%s", getPlayerSymbol());
-                }
-            } else if (bulletAt(row, col)) {
-                printf(":");
-            } else if (guardAt(row, col)) {
-                printf("%c", guardSymbolAt(row, col));
-            } else if (room[row][col] == 'E') {
-                printf("[]");
-            } else if (room[row][col] == '#') {
-                if (damagedWalls[row][col]) {
-                    printDamagedWallSymbol(row, col);
-                } else {
-                    printWallSymbol(row, col);
-                }
-            } else {
-                printf("%c", room[row][col]);
-            }
-        }
-        printf("\n");
-    }
-
-    printf("\n");
-    printf("Goal: reach [] without being deleted.\n");
-    printf("Controls: W A S D to move, . to wait, SPACE to blink, F to shoot, Q to quit\n");
-    printf("Message: %s\n", message);
-}
-
 void collectSignalIfNeeded(void) {
     if (room[playerRow][playerCol] == '*') {
         if (signalPower < MAX_SIGNAL) {
@@ -678,7 +1097,15 @@ void collectSignalIfNeeded(void) {
     }
 }
 
-int movePlayer(char command) {
+int playerTouchesEnemyBullet(void) {
+    return enemyBulletAt(playerRow, playerCol);
+}
+
+int tryMovePlayer(char command, long long currentMs) {
+    if (currentMs - lastPlayerMoveMs < PLAYER_MOVE_DELAY_MS) {
+        return 0;
+    }
+
     int newRow = playerRow;
     int newCol = playerCol;
 
@@ -696,87 +1123,117 @@ int movePlayer(char command) {
         lastDirection = '>';
     }
 
+    lastPlayerMoveMs = currentMs;
+
     if (room[newRow][newCol] != '#' && !guardAt(newRow, newCol)) {
         playerRow = newRow;
         playerCol = newCol;
+        lastMoveCommand = command;
+        strcpy(message, "You move through the room.");
+        collectSignalIfNeeded();
+
+        if (playerTouchesEnemyBullet()) {
+            killPlayer("You move into a hostile shot.");
+        }
+
         return 1;
     }
 
+    lastMoveCommand = '\0';
+    strcpy(message, "A wall blocks your movement.");
     return 0;
 }
 
-void updateBlinkAfterTurn(void) {
-    if (holdBlink) {
-        holdBlink = 0;
+void activateBlink(long long currentMs) {
+    if (blinkActive) {
+        strcpy(message, "You are already blinking.");
+        return;
+    }
+
+    if (signalPower <= 0) {
+        strcpy(message, "No Signal left.");
+        return;
+    }
+
+    signalPower--;
+    blinkActive = 1;
+    blinkEndMs = currentMs + BLINK_DURATION_MS;
+    lastMoveCommand = '\0';
+    strcpy(message, "You blink out of visible memory.");
+}
+
+void updateBlink(long long currentMs) {
+    if (blinkActive && currentMs >= blinkEndMs) {
+        blinkActive = 0;
+        strcpy(message, "You blink back into sight.");
     }
 }
 
-int fireBullet(void) {
-    if (bulletActive) {
+void firePlayerBullet(long long currentMs) {
+    if (playerBullet.active) {
         strcpy(message, "Only one shot can exist at a time.");
-        return 0;
+        return;
     }
 
     if (signalPower <= 0) {
         strcpy(message, "No Signal left to fire.");
-        return 0;
+        return;
     }
 
     signalPower--;
     lastMoveCommand = '\0';
 
-    bulletActive = 1;
-    bulletRow = playerRow;
-    bulletCol = playerCol;
-    bulletDirection = lastDirection;
+    playerBullet.active = 1;
+    playerBullet.row = playerRow;
+    playerBullet.col = playerCol;
+    playerBullet.direction = lastDirection;
+    playerBullet.lastMoveMs = currentMs;
 
     strcpy(message, "You spend 1 Signal and fire a thin pulse.");
-
-    return 1;
 }
 
-void movePlayerBullet(void) {
-    if (!bulletActive) {
+void movePlayerBullet(long long currentMs) {
+    if (!playerBullet.active || currentMs - playerBullet.lastMoveMs < PLAYER_BULLET_DELAY_MS) {
         return;
     }
 
     int rowDirection;
     int colDirection;
+    getDirection(playerBullet.direction, &rowDirection, &colDirection);
 
-    getDirection(bulletDirection, &rowDirection, &colDirection);
-
-    int newRow = bulletRow + rowDirection;
-    int newCol = bulletCol + colDirection;
+    int newRow = playerBullet.row + rowDirection;
+    int newCol = playerBullet.col + colDirection;
+    playerBullet.lastMoveMs = currentMs;
 
     if (room[newRow][newCol] == '#') {
         damagedWalls[newRow][newCol] = 1;
-        bulletActive = 0;
+        playerBullet.active = 0;
         strcpy(message, "The shot scars the wall.");
         return;
     }
 
-    bulletRow = newRow;
-    bulletCol = newCol;
+    playerBullet.row = newRow;
+    playerBullet.col = newCol;
 
-    if (removeGuardAt(bulletRow, bulletCol)) {
-        bulletActive = 0;
+    if (removeGuardAt(playerBullet.row, playerBullet.col)) {
+        playerBullet.active = 0;
         strcpy(message, "The shot deletes a guard.");
     }
 }
 
-void moveEnemyBullets(void) {
+void moveEnemyBullets(long long currentMs) {
     for (int i = 0; i < MAX_ENEMY_BULLETS; i++) {
-        if (!enemyBullets[i].active) {
+        if (!enemyBullets[i].active || currentMs - enemyBullets[i].lastMoveMs < ENEMY_BULLET_DELAY_MS) {
             continue;
         }
 
         int rowDirection;
         int colDirection;
-
         getDirection(enemyBullets[i].direction, &rowDirection, &colDirection);
 
         int newRow = enemyBullets[i].row + rowDirection;
         int newCol = enemyBullets[i].col + colDirection;
+        enemyBullets[i].lastMoveMs = currentMs;
 
         if (room[newRow][newCol] == '#') {
             enemyBullets[i].active = 0;
@@ -794,14 +1251,13 @@ void moveEnemyBullets(void) {
 }
 
 int guardSeesPlayer(void) {
-    if (holdBlink) {
+    if (blinkActive) {
         return 0;
     }
 
     for (int i = 0; i < guardCount; i++) {
         int rowDirection;
         int colDirection;
-
         getDirection(guards[i].direction, &rowDirection, &colDirection);
 
         int visionRow = guards[i].row + rowDirection;
@@ -826,7 +1282,6 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
 
     if (row == playerRow) {
         int step = signOf(playerCol - col);
-
         if (step == 0) {
             return 0;
         }
@@ -836,7 +1291,6 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
             if (room[row][checkCol] == '#') {
                 return 0;
             }
-
             checkCol += step;
         }
 
@@ -846,7 +1300,6 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
 
     if (col == playerCol) {
         int step = signOf(playerRow - row);
-
         if (step == 0) {
             return 0;
         }
@@ -856,7 +1309,6 @@ int guardHasLineOfSightToPlayer(int guardIndex, char *shotDirection) {
             if (room[checkRow][col] == '#') {
                 return 0;
             }
-
             checkRow += step;
         }
 
@@ -877,7 +1329,7 @@ int findEnemyBulletSlot(void) {
     return -1;
 }
 
-void fireEnemyBulletFromGuard(int guardIndex, char direction) {
+void fireEnemyBulletFromGuard(int guardIndex, char direction, long long currentMs) {
     if (guardAmmo[guardIndex] <= 0) {
         return;
     }
@@ -889,7 +1341,6 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction) {
 
     int rowDirection;
     int colDirection;
-
     getDirection(direction, &rowDirection, &colDirection);
 
     int startRow = guards[guardIndex].row + rowDirection;
@@ -911,29 +1362,46 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction) {
     enemyBullets[slot].row = startRow;
     enemyBullets[slot].col = startCol;
     enemyBullets[slot].direction = direction;
+    enemyBullets[slot].lastMoveMs = currentMs;
 
     strcpy(message, "A guard fires. The shot cuts through the room.");
 }
 
-void guardsShootIfPossible(void) {
+void guardsShootIfPossible(long long currentMs) {
+    if (currentMs - lastEnemyShootMs < ENEMY_SHOOT_DELAY_MS) {
+        return;
+    }
+
+    int fired = 0;
+
     for (int i = 0; i < guardCount; i++) {
-        char shotDirection;
+        char shotDirection = '>';
 
         if (guardHasLineOfSightToPlayer(i, &shotDirection)) {
-            fireEnemyBulletFromGuard(i, shotDirection);
+            fireEnemyBulletFromGuard(i, shotDirection, currentMs);
+            fired = 1;
 
             if (playerCaught) {
                 return;
             }
         }
     }
+
+    if (fired) {
+        lastEnemyShootMs = currentMs;
+    }
 }
 
-void movePatrolGuards(void) {
+void movePatrolGuards(long long currentMs) {
+    if (currentMs - lastGuardMoveMs < GUARD_PATROL_DELAY_MS) {
+        return;
+    }
+
+    lastGuardMoveMs = currentMs;
+
     for (int i = 0; i < guardCount; i++) {
         int rowDirection;
         int colDirection;
-
         getDirection(guards[i].direction, &rowDirection, &colDirection);
 
         int newRow = guards[i].row + rowDirection;
@@ -944,18 +1412,15 @@ void movePatrolGuards(void) {
             return;
         }
 
-        if (bulletActive && newRow == bulletRow && newCol == bulletCol) {
-            bulletActive = 0;
+        if (playerBullet.active && newRow == playerBullet.row && newCol == playerBullet.col) {
+            playerBullet.active = 0;
             removeGuardByIndex(i);
             i--;
             strcpy(message, "A guard walks into your shot.");
             continue;
         }
 
-        if (room[newRow][newCol] == '#' ||
-            room[newRow][newCol] == 'E' ||
-            room[newRow][newCol] == '*' ||
-            guardAt(newRow, newCol)) {
+        if (room[newRow][newCol] == '#' || room[newRow][newCol] == 'E' || room[newRow][newCol] == '*' || guardAt(newRow, newCol)) {
             guards[i].direction = reverseDirection(guards[i].direction);
         } else {
             guards[i].row = newRow;
@@ -985,14 +1450,18 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
     return 1;
 }
 
-void moveChasingGuards(void) {
+void moveChasingGuards(long long currentMs) {
+    if (currentMs - lastGuardMoveMs < GUARD_ALERT_DELAY_MS) {
+        return;
+    }
+
+    lastGuardMoveMs = currentMs;
+
     for (int i = 0; i < guardCount; i++) {
         int rowDiff = playerRow - guards[i].row;
         int colDiff = playerCol - guards[i].col;
-
         int rowStep = signOf(rowDiff);
         int colStep = signOf(colDiff);
-
         int moved = 0;
 
         if (abs(rowDiff) >= abs(colDiff)) {
@@ -1019,42 +1488,6 @@ void moveChasingGuards(void) {
     }
 }
 
-void advanceWorldAfterAction(void) {
-    movePlayerBullet();
-
-    if (playerCaught) {
-        updateBlinkAfterTurn();
-        return;
-    }
-
-    moveEnemyBullets();
-
-    if (playerCaught) {
-        updateBlinkAfterTurn();
-        return;
-    }
-
-    if (alertMode) {
-        moveChasingGuards();
-
-        if (playerCaught) {
-            updateBlinkAfterTurn();
-            return;
-        }
-
-        guardsShootIfPossible();
-    } else {
-        movePatrolGuards();
-
-        if (!playerCaught && guardSeesPlayer()) {
-            alertMode = 1;
-            strcpy(message, "ALERT. Every guard locks onto your signal.");
-        }
-    }
-
-    updateBlinkAfterTurn();
-}
-
 int reachedExit(void) {
     return room[playerRow][playerCol] == 'E';
 }
@@ -1069,98 +1502,190 @@ int advanceLevelIfPossible(void) {
     }
 
     loadLevel(currentLevel + 1);
+    strcpy(message, "Room loaded. Keep moving.");
     return 1;
 }
 
-int playGame(void) {
-    char input[20];
-    int gameRunning = 1;
+void updateWorld(long long currentMs) {
+    updateBlink(currentMs);
+    movePlayerBullet(currentMs);
+
+    if (playerCaught) {
+        return;
+    }
+
+    moveEnemyBullets(currentMs);
+
+    if (playerCaught) {
+        return;
+    }
+
+    if (alertMode) {
+        moveChasingGuards(currentMs);
+
+        if (playerCaught) {
+            return;
+        }
+
+        guardsShootIfPossible(currentMs);
+    } else {
+        movePatrolGuards(currentMs);
+
+        if (!playerCaught && guardSeesPlayer()) {
+            alertMode = 1;
+            strcpy(message, "ALERT. Every guard locks onto your signal.");
+        }
+    }
+}
+
+void drawRoomRealtime(void) {
+    char elapsedBuffer[32];
+    long long elapsed = nowMs() - runStartMs;
+    formatTime(elapsed, elapsedBuffer, sizeof(elapsedBuffer));
+
+    clearScreen();
+    printf("╔════════════════════════════════╗\n");
+    printf("║             BLINK              ║\n");
+    printf("╚════════════════════════════════╝\n\n");
+    printf("Profile:    %s\n", hasCurrentPlayer ? currentPlayerName : "NONE");
+    printf("Room:       %d/%d\n", currentLevel + 1, LEVEL_COUNT);
+    printf("Time:       %s\n", elapsedBuffer);
+
+    if (alertMode) {
+        printf("Mode:       ALERT - THEY KNOW WHERE YOU ARE\n");
+    } else {
+        printf("Mode:       CALM\n");
+    }
+
+    printf("State:      %s\n", blinkActive ? "BLINKING" : "VISIBLE");
+    printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
+    printf("Facing:     %c\n\n", lastDirection);
+
+    for (int row = 0; row < HEIGHT; row++) {
+        for (int col = 0; col < WIDTH; col++) {
+            if (row == playerRow && col == playerCol) {
+                if (playerDead) {
+                    printf("%s", getPlayerSymbol());
+                } else if (blinkActive) {
+                    printf(" ");
+                } else {
+                    printf("%s", getPlayerSymbol());
+                }
+            } else if (bulletAt(row, col)) {
+                printf(":");
+            } else if (guardAt(row, col)) {
+                printf("%c", guardSymbolAt(row, col));
+            } else if (room[row][col] == 'E') {
+                printf("[]");
+            } else if (room[row][col] == '#') {
+                if (damagedWalls[row][col]) {
+                    printDamagedWallSymbol(row, col);
+                } else {
+                    printWallSymbol(row, col);
+                }
+            } else {
+                printf("%c", room[row][col]);
+            }
+        }
+        printf("\n");
+    }
+
+    printf("\nWASD move | SPACE blink | F shoot | Q quit run\n");
+    printf("Message: %s\n", message);
+    fflush(stdout);
+}
+
+void handleGameplayInput(long long currentMs, int *quitRun) {
+    while (keyAvailable()) {
+        int key = readKey();
+
+        if (key == -1) {
+            return;
+        }
+
+        char command = (char)tolower(key);
+
+        if (command == 'q') {
+            *quitRun = 1;
+            return;
+        }
+
+        if (command == 'w' || command == 'a' || command == 's' || command == 'd') {
+            tryMovePlayer(command, currentMs);
+        } else if (key == ' ') {
+            activateBlink(currentMs);
+        } else if (command == 'f') {
+            firePlayerBullet(currentMs);
+        }
+    }
+}
+
+int runRealtimeGame(void) {
+    int quitRun = 0;
+    int won = 0;
+    long long lastDrawMs = 0;
 
     resetGame();
+    enableRawMode();
 
-    while (gameRunning) {
-        drawRoom();
+    while (!quitRun && !playerCaught && !won) {
+        long long currentMs = nowMs();
+
+        handleGameplayInput(currentMs, &quitRun);
+        updateWorld(currentMs);
 
         if (reachedExit()) {
             if (advanceLevelIfPossible()) {
-                continue;
-            }
-
-            printf("\nYou reached the final [].\n");
-            printf("The terminal loses your signal.\n");
-            printf("You escaped.\n");
-            printf("BLINK.\n");
-
-            unlockRandomHat();
-
-            return 1;
-        }
-
-        if (playerCaught) {
-            drawRoom();
-
-            printf("\nThe terminal deletes your position.\n");
-            printf("GAME OVER.\n");
-
-            return 0;
-        }
-
-        printf("\nCommand: ");
-
-        if (fgets(input, sizeof(input), stdin) == NULL) {
-            return 0;
-        }
-
-        char command = tolower(input[0]);
-
-        if (command == 'q') {
-            gameRunning = 0;
-        } else if (command == ' ') {
-            lastMoveCommand = '\0';
-
-            if (holdBlink) {
-                strcpy(message, "You are already blinking.");
-            } else if (signalPower > 0) {
-                signalPower--;
-                holdBlink = 1;
-                strcpy(message, "You blink out. Your next action is hidden.");
+                /* Continue the same timed run. */
             } else {
-                strcpy(message, "No Signal left.");
+                won = 1;
+                finalRunTimeMs = currentMs - runStartMs;
             }
-        } else if (command == 'f') {
-            int fired = fireBullet();
-
-            if (fired) {
-                advanceWorldAfterAction();
-            }
-        } else if (command == '.' || command == '\n') {
-            lastMoveCommand = '\0';
-            strcpy(message, "You wait. The terminal breathes.");
-            advanceWorldAfterAction();
-        } else if (command == 'w' || command == 'a' || command == 's' || command == 'd') {
-            int moved = movePlayer(command);
-
-            if (moved) {
-                lastMoveCommand = command;
-                strcpy(message, "You move through the room.");
-                collectSignalIfNeeded();
-            } else {
-                lastMoveCommand = '\0';
-                strcpy(message, "A wall blocks your movement.");
-            }
-
-            advanceWorldAfterAction();
-        } else {
-            lastMoveCommand = '\0';
-            strcpy(message, "Unknown command.");
         }
+
+        if (currentMs - lastDrawMs >= FRAME_DELAY_MS) {
+            drawRoomRealtime();
+            lastDrawMs = currentMs;
+        }
+
+        sleepMs(5);
     }
 
+    drawRoomRealtime();
+    disableRawMode();
+
+    if (quitRun) {
+        printf("\nRun abandoned.\n");
+        return 0;
+    }
+
+    if (!hasCurrentPlayer) {
+        askForPlayerName();
+    }
+
+    if (won) {
+        char finishBuffer[32];
+        formatTime(finalRunTimeMs, finishBuffer, sizeof(finishBuffer));
+        printf("\nYou reached the final [].\n");
+        printf("Finish time: %s\n", finishBuffer);
+        printf("The terminal loses your signal.\n");
+        printf("You escaped.\n");
+        printf("BLINK.\n");
+
+        unlockRandomHat();
+        recordGameResult(1, finalRunTimeMs);
+        return 1;
+    }
+
+    printf("\nThe terminal deletes your position.\n");
+    printf("GAME OVER.\n");
+    recordGameResult(0, -1);
     return 0;
 }
 
 int main(void) {
-    srand(time(NULL));
+    srand((unsigned int)time(NULL));
+    atexit(disableRawMode);
 
     if (!showTitleScreen()) {
         printf("\nGame closed.\n");
@@ -1168,7 +1693,7 @@ int main(void) {
     }
 
     while (1) {
-        playGame();
+        runRealtimeGame();
 
         if (!askRestart()) {
             break;
