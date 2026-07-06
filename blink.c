@@ -10,7 +10,7 @@
 #define MAX_SIGNAL 5
 
 /*
-    BLINK v0.1 - Step 7
+    BLINK v0.1 - Step 8
 
     _ = player / cursor
     # = wall
@@ -137,6 +137,79 @@ void clearScreen(void) {
 #endif
 }
 
+void waitForEnter(void) {
+    char input[20];
+    fgets(input, sizeof(input), stdin);
+}
+
+int showTitleScreen(void) {
+    char input[20];
+
+    while (1) {
+        clearScreen();
+
+        printf("========================\n");
+        printf("         BLINK\n");
+        printf("========================\n\n");
+
+        printf("You are the cursor.\n\n");
+        printf("When you appear,\n");
+        printf("they can see you.\n\n");
+        printf("When you vanish,\n");
+        printf("you can move.\n\n");
+
+        printf("Reach [] without being seen.\n\n");
+
+        printf("Controls:\n");
+        printf("W A S D  - move\n");
+        printf(".        - wait\n");
+        printf("SPACE    - hold blink while hidden\n");
+        printf("Q        - quit\n\n");
+
+        printf("Press ENTER to start.\n");
+        printf("Press Q and ENTER to quit.\n\n");
+
+        printf("Command: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return 0;
+        }
+
+        char command = tolower(input[0]);
+
+        if (command == 'q') {
+            return 0;
+        }
+
+        if (command == '\n') {
+            return 1;
+        }
+    }
+}
+
+int askRestart(void) {
+    char input[20];
+
+    while (1) {
+        printf("\nPress R to restart or Q to quit.\n");
+        printf("Command: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return 0;
+        }
+
+        char command = tolower(input[0]);
+
+        if (command == 'r') {
+            return 1;
+        }
+
+        if (command == 'q') {
+            return 0;
+        }
+    }
+}
+
 void loadLevel(int levelIndex) {
     currentLevel = levelIndex;
 
@@ -156,6 +229,11 @@ void loadLevel(int levelIndex) {
     holdBlink = 0;
     playerCaught = 0;
     strcpy(message, levels[levelIndex].introMessage);
+}
+
+void resetGame(void) {
+    signalPower = 3;
+    loadLevel(0);
 }
 
 int guardAt(int row, int col) {
@@ -331,7 +409,10 @@ void moveGuards(void) {
             return;
         }
 
-        if (room[newRow][newCol] == '#' || room[newRow][newCol] == 'E' || room[newRow][newCol] == '*' || guardAt(newRow, newCol)) {
+        if (room[newRow][newCol] == '#' ||
+            room[newRow][newCol] == 'E' ||
+            room[newRow][newCol] == '*' ||
+            guardAt(newRow, newCol)) {
             guards[i].direction = reverseDirection(guards[i].direction);
         } else {
             guards[i].row = newRow;
@@ -357,11 +438,11 @@ int advanceLevelIfPossible(void) {
     return 1;
 }
 
-int main(void) {
+int playGame(void) {
     char input[20];
     int gameRunning = 1;
 
-    loadLevel(0);
+    resetGame();
 
     while (gameRunning) {
         drawRoom();
@@ -375,20 +456,22 @@ int main(void) {
             printf("The terminal loses your signal.\n");
             printf("You escaped.\n");
             printf("BLINK.\n");
-            break;
+
+            return 1;
         }
 
         if (playerCaught || guardSeesPlayer()) {
             printf("\nYou blinked into sight.\n");
             printf("A guard saw you.\n");
             printf("GAME OVER.\n");
-            break;
+
+            return 0;
         }
 
         printf("\nCommand: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
-            break;
+            return 0;
         }
 
         char command = tolower(input[0]);
@@ -423,6 +506,23 @@ int main(void) {
             }
         } else {
             strcpy(message, "Unknown command.");
+        }
+    }
+
+    return 0;
+}
+
+int main(void) {
+    if (!showTitleScreen()) {
+        printf("\nGame closed.\n");
+        return 0;
+    }
+
+    while (1) {
+        playGame();
+
+        if (!askRestart()) {
+            break;
         }
     }
 
