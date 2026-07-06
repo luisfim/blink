@@ -403,18 +403,27 @@ void updateBlinkAfterTurn(void) {
     }
 }
 
-void fireBullet(void) {
+int fireBullet(void) {
     if (bulletActive) {
         strcpy(message, "Only one shot can exist at a time.");
-        return;
+        return 0;
     }
+
+    if (signalPower <= 0) {
+        strcpy(message, "No Signal left to fire.");
+        return 0;
+    }
+
+    signalPower--;
 
     bulletActive = 1;
     bulletRow = playerRow;
     bulletCol = playerCol;
     bulletDirection = lastDirection;
 
-    strcpy(message, "You fire a thin pulse of signal.");
+    strcpy(message, "You spend 1 Signal and fire a thin pulse.");
+
+    return 1;
 }
 
 void moveBullet(void) {
@@ -581,8 +590,11 @@ int playGame(void) {
                 strcpy(message, "No Signal left.");
             }
         } else if (command == 'f') {
-            fireBullet();
-            advanceWorldAfterAction();
+            int fired = fireBullet();
+
+            if (fired) {
+                advanceWorldAfterAction();
+            }
         } else if (command == '.' || command == '\n') {
             strcpy(message, "You wait. The terminal breathes.");
             advanceWorldAfterAction();
