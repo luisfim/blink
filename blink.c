@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
+#include <time.h>
 
 #define HEIGHT 9
 #define WIDTH 20
@@ -10,23 +11,34 @@
 #define MAX_SIGNAL 5
 #define GUARD_AMMO 3
 #define MAX_ENEMY_BULLETS 12
+#define HAT_COUNT 3
 
 /*
-    BLINK v0.1 - Step 11
+    BLINK v0.1
 
-    _ = player / cursor
-    # = wall
+    Player symbols:
+    o = idle player
+    ò = moving right
+    ó = moving left
+    ø = dead player
+
+    Unlockable hats:
+    ô õ ö
+
+    Other symbols:
+    # = wall internally, drawn as box-drawing symbols
     . = floor
     * = Signal pickup
     : = bullet
     E = exit, visually representing []
-    ^ > < v = guards and their line of sight / movement direction
+    ^ > < v = guards and their direction
 
     Controls:
     W A S D = move
     .       = wait
-    SPACE   = hold blink while hidden
+    SPACE   = blink for one hidden action
     F       = shoot in last movement direction
+    H       = hats menu
     Q       = quit
 */
 
@@ -49,7 +61,7 @@ typedef struct {
     int startCol;
     int guardCount;
     Guard startingGuards[MAX_GUARDS];
-    char introMessage[120];
+    char introMessage[160];
 } Level;
 
 Level levels[LEVEL_COUNT] = {
@@ -125,6 +137,8 @@ Level levels[LEVEL_COUNT] = {
 };
 
 char room[HEIGHT][WIDTH + 1];
+int damagedWalls[HEIGHT][WIDTH];
+
 Guard guards[MAX_GUARDS];
 int guardAmmo[MAX_GUARDS];
 
@@ -134,10 +148,10 @@ int guardCount = 0;
 int playerRow = 1;
 int playerCol = 1;
 
-int isVisible = 1;
 int signalPower = 3;
 int holdBlink = 0;
 int playerCaught = 0;
+int playerDead = 0;
 int alertMode = 0;
 
 int bulletActive = 0;
@@ -145,8 +159,13 @@ int bulletRow = 0;
 int bulletCol = 0;
 char bulletDirection = '>';
 char lastDirection = '>';
+char lastMoveCommand = '\0';
 
 Bullet enemyBullets[MAX_ENEMY_BULLETS];
+
+const char *hatSymbols[HAT_COUNT] = {"ô", "õ", "ö"};
+int unlockedHats[HAT_COUNT] = {0, 0, 0};
+int selectedHat = -1;
 
 char message[160] = "The cursor blinks into existence.";
 
@@ -170,6 +189,106 @@ int signOf(int value) {
     return 0;
 }
 
+int isWallAt(int row, int col) {
+    if (row < 0 || row >= HEIGHT || col < 0 || col >= WIDTH) {
+        return 0;
+    }
+
+    return room[row][col] == '#';
+}
+
+void printWallSymbol(int row, int col) {
+    int up = isWallAt(row - 1, col);
+    int down = isWallAt(row + 1, col);
+    int left = isWallAt(row, col - 1);
+    int right = isWallAt(row, col + 1);
+
+    if (up && down && left && right) {
+        printf("╬");
+    } else if (up && down && left) {
+        printf("╣");
+    } else if (up && down && right) {
+        printf("╠");
+    } else if (left && right && up) {
+        printf("╩");
+    } else if (left && right && down) {
+        printf("╦");
+    } else if (up && down) {
+        printf("║");
+    } else if (left && right) {
+        printf("═");
+    } else if (right && down) {
+        printf("╔");
+    } else if (left && down) {
+        printf("╗");
+    } else if (right && up) {
+        printf("╚");
+    } else if (left && up) {
+        printf("╝");
+    } else {
+        printf("╬");
+    }
+}
+
+void printDamagedWallSymbol(int row, int col) {
+    int up = isWallAt(row - 1, col);
+    int down = isWallAt(row + 1, col);
+    int left = isWallAt(row, col - 1);
+    int right = isWallAt(row, col + 1);
+
+    if (up && down && left && right) {
+        printf("┼");
+    } else if (up && down && left) {
+        printf("┤");
+    } else if (up && down && right) {
+        printf("├");
+    } else if (left && right && up) {
+        printf("┴");
+    } else if (left && right && down) {
+        printf("┬");
+    } else if (up && down) {
+        printf("│");
+    } else if (left && right) {
+        printf("─");
+    } else if (right && down) {
+        printf("╒");
+    } else if (left && down) {
+        printf("┐");
+    } else if (right && up) {
+        printf("└");
+    } else if (left && up) {
+        printf("┘");
+    } else {
+        printf("┼");
+    }
+}
+
+const char *getPlayerSymbol(void) {
+    if (playerDead) {
+        return "ø";
+    }
+
+    if (lastMoveCommand == 'd') {
+        return "ò";
+    }
+
+    if (lastMoveCommand == 'a') {
+        return "ó";
+    }
+
+    if (selectedHat >= 0 && unlockedHats[selectedHat]) {
+        return hatSymbols[selectedHat];
+    }
+
+    return "o";
+}
+
+void killPlayer(const char *deathMessage) {
+    playerCaught = 1;
+    playerDead = 1;
+    strcpy(message, deathMessage);
+}
+
 char directionFromStep(int rowStep, int colStep) {
     if (rowStep < 0) {
         return '^';
@@ -190,6 +309,84 @@ char directionFromStep(int rowStep, int colStep) {
     return '>';
 }
 
+void showHatMenu(void) {
+    char input[20];
+
+    while (1) {
+        clearScreen();
+
+        printf("========================\n");
+        printf("       BLINK HATS\n");
+        printf("========================\n\n");
+
+        printf("Current player: %s\n\n", getPlayerSymbol());
+
+        printf("0 - no hat: o\n");
+
+        for (int i = 0; i < HAT_COUNT; i++) {
+            printf("%d - hat %d: %s [%s]\n",
+                   i + 1,
+                   i + 1,
+                   hatSymbols[i],
+                   unlockedHats[i] ? "unlocked" : "locked");
+        }
+
+        printf("\nPress 0-3 to choose.\n");
+        printf("Press B to go back.\n\n");
+        printf("Command: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return;
+        }
+
+        char command = tolower(input[0]);
+
+        if (command == 'b') {
+            return;
+        }
+
+        if (command == '0') {
+            selectedHat = -1;
+            return;
+        }
+
+        if (command >= '1' && command <= '3') {
+            int hatIndex = command - '1';
+
+            if (unlockedHats[hatIndex]) {
+                selectedHat = hatIndex;
+                return;
+            }
+        }
+    }
+}
+
+void unlockRandomHat(void) {
+    int lockedHats[HAT_COUNT];
+    int lockedCount = 0;
+
+    for (int i = 0; i < HAT_COUNT; i++) {
+        if (!unlockedHats[i]) {
+            lockedHats[lockedCount] = i;
+            lockedCount++;
+        }
+    }
+
+    if (lockedCount == 0) {
+        printf("\nYou already unlocked every hat.\n");
+        return;
+    }
+
+    int randomSlot = rand() % lockedCount;
+    int hatIndex = lockedHats[randomSlot];
+
+    unlockedHats[hatIndex] = 1;
+    selectedHat = hatIndex;
+
+    printf("\nNew hat unlocked: %s\n", hatSymbols[hatIndex]);
+    printf("It has been equipped for the next run.\n");
+}
+
 int showTitleScreen(void) {
     char input[20];
 
@@ -200,11 +397,13 @@ int showTitleScreen(void) {
         printf("         BLINK\n");
         printf("========================\n\n");
 
+        printf("Current player: %s\n\n", getPlayerSymbol());
+
         printf("You are the cursor.\n\n");
         printf("When you appear,\n");
         printf("they can see you.\n\n");
-        printf("When you vanish,\n");
-        printf("you can move.\n\n");
+        printf("Use Blink to vanish\n");
+        printf("for one hidden action.\n\n");
 
         printf("If you are spotted, the room enters ALERT.\n");
         printf("Every guard starts chasing and firing.\n\n");
@@ -214,11 +413,13 @@ int showTitleScreen(void) {
         printf("Controls:\n");
         printf("W A S D  - move\n");
         printf(".        - wait\n");
-        printf("SPACE    - hold blink while hidden\n");
+        printf("SPACE    - blink for one hidden action\n");
         printf("F        - shoot in your last direction\n");
+        printf("H        - hats\n");
         printf("Q        - quit\n\n");
 
         printf("Press ENTER to start.\n");
+        printf("Press H and ENTER to change hats.\n");
         printf("Press Q and ENTER to quit.\n\n");
 
         printf("Command: ");
@@ -233,6 +434,10 @@ int showTitleScreen(void) {
             return 0;
         }
 
+        if (command == 'h') {
+            showHatMenu();
+        }
+
         if (command == '\n') {
             return 1;
         }
@@ -243,7 +448,7 @@ int askRestart(void) {
     char input[20];
 
     while (1) {
-        printf("\nPress R to restart or Q to quit.\n");
+        printf("\nPress R to restart, H to change hats, or Q to quit.\n");
         printf("Command: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
@@ -254,6 +459,10 @@ int askRestart(void) {
 
         if (command == 'r') {
             return 1;
+        }
+
+        if (command == 'h') {
+            showHatMenu();
         }
 
         if (command == 'q') {
@@ -288,6 +497,10 @@ void loadLevel(int levelIndex) {
 
     for (int row = 0; row < HEIGHT; row++) {
         strcpy(room[row], levels[levelIndex].layout[row]);
+
+        for (int col = 0; col < WIDTH; col++) {
+            damagedWalls[row][col] = 0;
+        }
     }
 
     playerRow = levels[levelIndex].startRow;
@@ -299,12 +512,13 @@ void loadLevel(int levelIndex) {
         guardAmmo[i] = GUARD_AMMO;
     }
 
-    isVisible = 1;
     holdBlink = 0;
     playerCaught = 0;
+    playerDead = 0;
     alertMode = 0;
     bulletActive = 0;
     lastDirection = '>';
+    lastMoveCommand = '\0';
     clearEnemyBullets();
     strcpy(message, levels[levelIndex].introMessage);
 }
@@ -404,19 +618,27 @@ void drawRoom(void) {
     printf("========================\n\n");
 
     printf("Room:       %d/%d\n", currentLevel + 1, LEVEL_COUNT);
-    printf("Mode:       %s\n", alertMode ? "ALERT" : "CALM");
-    printf("State:      %s\n", isVisible ? "VISIBLE" : "HIDDEN");
+
+    if (alertMode) {
+        printf("Mode:       ALERT - THEY KNOW WHERE YOU ARE\n");
+    } else {
+        printf("Mode:       CALM\n");
+    }
+
+    printf("State:      %s\n", holdBlink ? "BLINKING" : "VISIBLE");
     printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
-    printf("Hold Blink: %s\n", holdBlink ? "ACTIVE" : "OFF");
+    printf("Blink:      %s\n", holdBlink ? "ACTIVE" : "OFF");
     printf("Facing:     %c\n\n", lastDirection);
 
     for (int row = 0; row < HEIGHT; row++) {
         for (int col = 0; col < WIDTH; col++) {
             if (row == playerRow && col == playerCol) {
-                if (isVisible) {
-                    printf("_");
-                } else {
+                if (playerDead) {
+                    printf("%s", getPlayerSymbol());
+                } else if (holdBlink) {
                     printf(" ");
+                } else {
+                    printf("%s", getPlayerSymbol());
                 }
             } else if (bulletAt(row, col)) {
                 printf(":");
@@ -424,6 +646,12 @@ void drawRoom(void) {
                 printf("%c", guardSymbolAt(row, col));
             } else if (room[row][col] == 'E') {
                 printf("[]");
+            } else if (room[row][col] == '#') {
+                if (damagedWalls[row][col]) {
+                    printDamagedWallSymbol(row, col);
+                } else {
+                    printWallSymbol(row, col);
+                }
             } else {
                 printf("%c", room[row][col]);
             }
@@ -433,7 +661,7 @@ void drawRoom(void) {
 
     printf("\n");
     printf("Goal: reach [] without being deleted.\n");
-    printf("Controls: W A S D to move, . to wait, SPACE to hold blink, F to shoot, Q to quit\n");
+    printf("Controls: W A S D to move, . to wait, SPACE to blink, F to shoot, Q to quit\n");
     printf("Message: %s\n", message);
 }
 
@@ -479,10 +707,7 @@ int movePlayer(char command) {
 
 void updateBlinkAfterTurn(void) {
     if (holdBlink) {
-        isVisible = 0;
         holdBlink = 0;
-    } else {
-        isVisible = !isVisible;
     }
 }
 
@@ -498,6 +723,7 @@ int fireBullet(void) {
     }
 
     signalPower--;
+    lastMoveCommand = '\0';
 
     bulletActive = 1;
     bulletRow = playerRow;
@@ -523,8 +749,9 @@ void movePlayerBullet(void) {
     int newCol = bulletCol + colDirection;
 
     if (room[newRow][newCol] == '#') {
+        damagedWalls[newRow][newCol] = 1;
         bulletActive = 0;
-        strcpy(message, "The shot breaks against a wall.");
+        strcpy(message, "The shot scars the wall.");
         return;
     }
 
@@ -560,15 +787,14 @@ void moveEnemyBullets(void) {
         enemyBullets[i].col = newCol;
 
         if (enemyBullets[i].row == playerRow && enemyBullets[i].col == playerCol) {
-            playerCaught = 1;
-            strcpy(message, "A hostile shot hits the cursor.");
+            killPlayer("A hostile shot hits the cursor.");
             return;
         }
     }
 }
 
 int guardSeesPlayer(void) {
-    if (!isVisible) {
+    if (holdBlink) {
         return 0;
     }
 
@@ -677,8 +903,7 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction) {
     guards[guardIndex].direction = direction;
 
     if (startRow == playerRow && startCol == playerCol) {
-        playerCaught = 1;
-        strcpy(message, "A guard fires point blank.");
+        killPlayer("A guard fires point blank.");
         return;
     }
 
@@ -715,8 +940,7 @@ void movePatrolGuards(void) {
         int newCol = guards[i].col + colDirection;
 
         if (newRow == playerRow && newCol == playerCol) {
-            playerCaught = 1;
-            strcpy(message, "A guard touches the cursor.");
+            killPlayer("A guard touches the cursor.");
             return;
         }
 
@@ -746,8 +970,7 @@ int tryMoveChasingGuard(int guardIndex, int rowStep, int colStep) {
 
     if (newRow == playerRow && newCol == playerCol) {
         guards[guardIndex].direction = directionFromStep(rowStep, colStep);
-        playerCaught = 1;
-        strcpy(message, "A guard reaches the cursor.");
+        killPlayer("A guard reaches the cursor.");
         return 1;
     }
 
@@ -797,16 +1020,17 @@ void moveChasingGuards(void) {
 }
 
 void advanceWorldAfterAction(void) {
-    updateBlinkAfterTurn();
     movePlayerBullet();
 
     if (playerCaught) {
+        updateBlinkAfterTurn();
         return;
     }
 
     moveEnemyBullets();
 
     if (playerCaught) {
+        updateBlinkAfterTurn();
         return;
     }
 
@@ -814,13 +1038,21 @@ void advanceWorldAfterAction(void) {
         moveChasingGuards();
 
         if (playerCaught) {
+            updateBlinkAfterTurn();
             return;
         }
 
         guardsShootIfPossible();
     } else {
         movePatrolGuards();
+
+        if (!playerCaught && guardSeesPlayer()) {
+            alertMode = 1;
+            strcpy(message, "ALERT. Every guard locks onto your signal.");
+        }
     }
+
+    updateBlinkAfterTurn();
 }
 
 int reachedExit(void) {
@@ -847,11 +1079,6 @@ int playGame(void) {
     resetGame();
 
     while (gameRunning) {
-        if (!alertMode && guardSeesPlayer()) {
-            alertMode = 1;
-            strcpy(message, "ALERT. Every guard locks onto your signal.");
-        }
-
         drawRoom();
 
         if (reachedExit()) {
@@ -864,10 +1091,14 @@ int playGame(void) {
             printf("You escaped.\n");
             printf("BLINK.\n");
 
+            unlockRandomHat();
+
             return 1;
         }
 
         if (playerCaught) {
+            drawRoom();
+
             printf("\nThe terminal deletes your position.\n");
             printf("GAME OVER.\n");
 
@@ -885,12 +1116,14 @@ int playGame(void) {
         if (command == 'q') {
             gameRunning = 0;
         } else if (command == ' ') {
-            if (!isVisible && signalPower > 0) {
+            lastMoveCommand = '\0';
+
+            if (holdBlink) {
+                strcpy(message, "You are already blinking.");
+            } else if (signalPower > 0) {
                 signalPower--;
                 holdBlink = 1;
-                strcpy(message, "You hold the blink. Your next move stays hidden.");
-            } else if (isVisible) {
-                strcpy(message, "You can only hold blink while hidden.");
+                strcpy(message, "You blink out. Your next action is hidden.");
             } else {
                 strcpy(message, "No Signal left.");
             }
@@ -901,20 +1134,24 @@ int playGame(void) {
                 advanceWorldAfterAction();
             }
         } else if (command == '.' || command == '\n') {
+            lastMoveCommand = '\0';
             strcpy(message, "You wait. The terminal breathes.");
             advanceWorldAfterAction();
         } else if (command == 'w' || command == 'a' || command == 's' || command == 'd') {
             int moved = movePlayer(command);
 
             if (moved) {
+                lastMoveCommand = command;
                 strcpy(message, "You move through the room.");
                 collectSignalIfNeeded();
             } else {
+                lastMoveCommand = '\0';
                 strcpy(message, "A wall blocks your movement.");
             }
 
             advanceWorldAfterAction();
         } else {
+            lastMoveCommand = '\0';
             strcpy(message, "Unknown command.");
         }
     }
@@ -923,6 +1160,8 @@ int playGame(void) {
 }
 
 int main(void) {
+    srand(time(NULL));
+
     if (!showTitleScreen()) {
         printf("\nGame closed.\n");
         return 0;
