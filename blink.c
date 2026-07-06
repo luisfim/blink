@@ -10,12 +10,13 @@
 #define MAX_SIGNAL 5
 
 /*
-    BLINK v0.1 - Step 8
+    BLINK v0.1 - Step 9
 
     _ = player / cursor
     # = wall
     . = floor
     * = Signal pickup
+    : = bullet
     E = exit, visually representing []
     ^ > < v = guards and their line of sight
 
@@ -23,6 +24,7 @@
     W A S D = move
     .       = wait
     SPACE   = hold blink while hidden
+    F       = shoot in last movement direction
     Q       = quit
 */
 
@@ -127,6 +129,12 @@ int signalPower = 3;
 int holdBlink = 0;
 int playerCaught = 0;
 
+int bulletActive = 0;
+int bulletRow = 0;
+int bulletCol = 0;
+char bulletDirection = '>';
+char lastDirection = '>';
+
 char message[120] = "The cursor blinks into existence.";
 
 void clearScreen(void) {
@@ -135,11 +143,6 @@ void clearScreen(void) {
 #else
     system("clear");
 #endif
-}
-
-void waitForEnter(void) {
-    char input[20];
-    fgets(input, sizeof(input), stdin);
 }
 
 int showTitleScreen(void) {
@@ -164,6 +167,7 @@ int showTitleScreen(void) {
         printf("W A S D  - move\n");
         printf(".        - wait\n");
         printf("SPACE    - hold blink while hidden\n");
+        printf("F        - shoot in your last direction\n");
         printf("Q        - quit\n\n");
 
         printf("Press ENTER to start.\n");
@@ -210,6 +214,21 @@ int askRestart(void) {
     }
 }
 
+void getDirection(char direction, int *rowDirection, int *colDirection) {
+    *rowDirection = 0;
+    *colDirection = 0;
+
+    if (direction == '^') {
+        *rowDirection = -1;
+    } else if (direction == 'v') {
+        *rowDirection = 1;
+    } else if (direction == '<') {
+        *colDirection = -1;
+    } else if (direction == '>') {
+        *colDirection = 1;
+    }
+}
+
 void loadLevel(int levelIndex) {
     currentLevel = levelIndex;
 
@@ -228,6 +247,8 @@ void loadLevel(int levelIndex) {
     isVisible = 1;
     holdBlink = 0;
     playerCaught = 0;
+    bulletActive = 0;
+    lastDirection = '>';
     strcpy(message, levels[levelIndex].introMessage);
 }
 
@@ -256,19 +277,8 @@ char guardSymbolAt(int row, int col) {
     return '\0';
 }
 
-void getDirection(char direction, int *rowDirection, int *colDirection) {
-    *rowDirection = 0;
-    *colDirection = 0;
-
-    if (direction == '^') {
-        *rowDirection = -1;
-    } else if (direction == 'v') {
-        *rowDirection = 1;
-    } else if (direction == '<') {
-        *colDirection = -1;
-    } else if (direction == '>') {
-        *colDirection = 1;
-    }
+int bulletAt(int row, int col) {
+    return bulletActive && bulletRow == row && bulletCol == col;
 }
 
 char reverseDirection(char direction) {
@@ -285,6 +295,25 @@ char reverseDirection(char direction) {
     return direction;
 }
 
+void removeGuardByIndex(int index) {
+    for (int i = index; i < guardCount - 1; i++) {
+        guards[i] = guards[i + 1];
+    }
+
+    guardCount--;
+}
+
+int removeGuardAt(int row, int col) {
+    for (int i = 0; i < guardCount; i++) {
+        if (guards[i].row == row && guards[i].col == col) {
+            removeGuardByIndex(i);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
 void drawRoom(void) {
     clearScreen();
 
@@ -295,7 +324,8 @@ void drawRoom(void) {
     printf("Room:       %d/%d\n", currentLevel + 1, LEVEL_COUNT);
     printf("State:      %s\n", isVisible ? "VISIBLE" : "HIDDEN");
     printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
-    printf("Hold Blink: %s\n\n", holdBlink ? "ACTIVE" : "OFF");
+    printf("Hold Blink: %s\n", holdBlink ? "ACTIVE" : "OFF");
+    printf("Facing:     %c\n\n", lastDirection);
 
     for (int row = 0; row < HEIGHT; row++) {
         for (int col = 0; col < WIDTH; col++) {
@@ -305,6 +335,8 @@ void drawRoom(void) {
                 } else {
                     printf(" ");
                 }
+            } else if (bulletAt(row, col)) {
+                printf(":");
             } else if (guardAt(row, col)) {
                 printf("%c", guardSymbolAt(row, col));
             } else if (room[row][col] == 'E') {
@@ -318,7 +350,7 @@ void drawRoom(void) {
 
     printf("\n");
     printf("Goal: reach [] without being seen.\n");
-    printf("Controls: W A S D to move, . to wait, SPACE to hold blink, Q to quit\n");
+    printf("Controls: W A S D to move, . to wait, SPACE to hold blink, F to shoot, Q to quit\n");
     printf("Message: %s\n", message);
 }
 
@@ -341,12 +373,16 @@ int movePlayer(char command) {
 
     if (command == 'w') {
         newRow--;
+        lastDirection = '^';
     } else if (command == 's') {
         newRow++;
+        lastDirection = 'v';
     } else if (command == 'a') {
         newCol--;
+        lastDirection = '<';
     } else if (command == 'd') {
         newCol++;
+        lastDirection = '>';
     }
 
     if (room[newRow][newCol] != '#' && !guardAt(newRow, newCol)) {
@@ -364,6 +400,48 @@ void updateBlinkAfterTurn(void) {
         holdBlink = 0;
     } else {
         isVisible = !isVisible;
+    }
+}
+
+void fireBullet(void) {
+    if (bulletActive) {
+        strcpy(message, "Only one shot can exist at a time.");
+        return;
+    }
+
+    bulletActive = 1;
+    bulletRow = playerRow;
+    bulletCol = playerCol;
+    bulletDirection = lastDirection;
+
+    strcpy(message, "You fire a thin pulse of signal.");
+}
+
+void moveBullet(void) {
+    if (!bulletActive) {
+        return;
+    }
+
+    int rowDirection;
+    int colDirection;
+
+    getDirection(bulletDirection, &rowDirection, &colDirection);
+
+    int newRow = bulletRow + rowDirection;
+    int newCol = bulletCol + colDirection;
+
+    if (room[newRow][newCol] == '#') {
+        bulletActive = 0;
+        strcpy(message, "The shot breaks against a wall.");
+        return;
+    }
+
+    bulletRow = newRow;
+    bulletCol = newCol;
+
+    if (removeGuardAt(bulletRow, bulletCol)) {
+        bulletActive = 0;
+        strcpy(message, "The shot deletes a guard.");
     }
 }
 
@@ -409,6 +487,14 @@ void moveGuards(void) {
             return;
         }
 
+        if (bulletActive && newRow == bulletRow && newCol == bulletCol) {
+            bulletActive = 0;
+            removeGuardByIndex(i);
+            i--;
+            strcpy(message, "A guard walks into your shot.");
+            continue;
+        }
+
         if (room[newRow][newCol] == '#' ||
             room[newRow][newCol] == 'E' ||
             room[newRow][newCol] == '*' ||
@@ -419,6 +505,12 @@ void moveGuards(void) {
             guards[i].col = newCol;
         }
     }
+}
+
+void advanceWorldAfterAction(void) {
+    updateBlinkAfterTurn();
+    moveBullet();
+    moveGuards();
 }
 
 int reachedExit(void) {
@@ -488,15 +580,14 @@ int playGame(void) {
             } else {
                 strcpy(message, "No Signal left.");
             }
+        } else if (command == 'f') {
+            fireBullet();
+            advanceWorldAfterAction();
         } else if (command == '.' || command == '\n') {
-            updateBlinkAfterTurn();
-            moveGuards();
             strcpy(message, "You wait. The terminal breathes.");
+            advanceWorldAfterAction();
         } else if (command == 'w' || command == 'a' || command == 's' || command == 'd') {
             int moved = movePlayer(command);
-
-            updateBlinkAfterTurn();
-            moveGuards();
 
             if (moved) {
                 strcpy(message, "You move through the room.");
@@ -504,6 +595,8 @@ int playGame(void) {
             } else {
                 strcpy(message, "A wall blocks your movement.");
             }
+
+            advanceWorldAfterAction();
         } else {
             strcpy(message, "Unknown command.");
         }
