@@ -29,11 +29,6 @@ This project is a modern recreation of that lost classic, built as a C practice 
 
 ---
 
-## Gameplay
-
-Zero must cross each room, follow the moving `1`, and reach the door.
----
-
 ## Controls
 
 ```text
@@ -63,21 +58,6 @@ Managing Signal is part of the strategy. Shooting everything is possible, but no
 Blink makes Zero temporarily disappear from enemy vision.
 
 Use it to cross dangerous sightlines, escape patrols, or survive when the system enters alert mode.
-
----
-
-## Profiles and Leaderboard
-
-Profiles store:
-```text
-Name
-Wins
-Deaths
-Best time
-```
-
-The leaderboard is stored locally on your machine.
-
 ---
 
 ## Requirements
