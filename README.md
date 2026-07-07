@@ -11,25 +11,20 @@
 
 **BLINK** is a real-time terminal stealth game written in C.
 
-You play as **Zero**, a small digital survivor moving through a hostile system of patrols, broken walls, hidden rooms, signal pickups and terminal doors. Move fast. Hide your signal. Escape before the system deletes you.
+You play as **Zero**, a small digital survivor moving through a hostile system. Move fast. Hide your signal. Escape before the system deletes you.
 
 ---
 
 ## The Legend
+According to the rummors, **BLINK** began as an 1980s assembly terminal game. Programmers would play it during breaks, competing from their workstations to see who could finish the fastest. It was simple: a blinking character trapped inside a hostile computer system, trying to outrun patrols and reach the next door.
 
-Long before modern engines, online leaderboards, and friendly interfaces, there was a terminal game whispered about inside programming offices.
-
-According to the old story, **BLINK** began as an obscure 1980s assembly terminal game. Programmers would secretly play it during breaks, competing from their workstations to see who could finish the fastest. It was simple, unforgiving, and strange: a blinking character trapped inside a hostile computer system, trying to outrun patrols and reach the next door.
-
-Nobody knows exactly who wrote the original version. Some say it was passed around on copied disks. Others say it lived only inside office machines, rewritten and modified by every programmer who touched it.
-
-This project is a modern recreation of that lost classic.
+Nobody knows exactly who wrote the original version. Some say it was passed around on copied disks. Others say it lived only inside office machines, rewritten and modified by every programmer who touched it. This project is a modern recreation of that lost classic.
 
 ---
 
 ## Gameplay
 
-Zero must cross each level and reach the door:
+Zero must follow the number crossing each level and reach the door:
 
 ```text
 []
@@ -43,11 +38,9 @@ W A S D  Move
 SPACE    Blink
 F        Shoot
 B        Back / abandon run
-Q        Quit from main menu
 ```
 
 ---
-
 ## Signal
 
 Zero uses **Signal** as a limited resource.
@@ -105,8 +98,6 @@ Name
 Wins
 Deaths
 Best time
-Unlocked hats
-Selected hat
 ```
 
 ## Build and Run
