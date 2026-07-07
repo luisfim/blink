@@ -46,16 +46,10 @@ Zero uses **Signal** as a limited resource.
 
 Signal is spent to Blink or Shoot
 
-
 Signal can be restored by collecting *
 
 Managing Signal is part of the strategy. Shooting everything is possible, but not always smart.
 
----
-
-## Blink
----
-Blink makes Zero temporarily disappear from enemy vision.Use it to cross dangerous sightlines, escape patrols, or survive when the system enters alert mode.
 ---
 
 ## Requirements
