@@ -114,13 +114,13 @@ Selected hat
 Compile with GCC:
 
 ```bash
-gcc -o blink
-```
+git clone https://github.com/luisfim/blink.git
 
+```
 Run:
 
 ```bash
-./blink
+cd blink
 ```
 
 ---
