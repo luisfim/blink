@@ -31,11 +31,7 @@ This project is a modern recreation of that lost classic, built as a C practice 
 
 ## Gameplay
 
-Zero must cross each room, follow the moving `1`, and reach the door:
-
-```text
-[]
-```
+Zero must cross each room, follow the moving `1`, and reach the door.
 ---
 
 ## Controls
@@ -53,18 +49,10 @@ Q        Quit from the main menu
 
 Zero uses **Signal** as a limited resource.
 
-Signal is spent to:
+Signal is spent to Blink or Shoot
 
-```text
-Blink
-Shoot
-```
 
-Signal can be restored by collecting:
-
-```text
-*
-```
+Signal can be restored by collecting *
 
 Managing Signal is part of the strategy. Shooting everything is possible, but not always smart.
 
@@ -80,14 +68,7 @@ Use it to cross dangerous sightlines, escape patrols, or survive when the system
 
 ## Profiles and Leaderboard
 
-BLINK uses a local save file:
-
-```text
-blink_saves.txt
-```
-
 Profiles store:
-
 ```text
 Name
 Wins
@@ -102,13 +83,6 @@ The leaderboard is stored locally on your machine.
 ## Requirements
 
 You need a C compiler and a terminal with UTF-8 support.
-
-Recommended terminal size:
-
-```text
-At least 80 columns wide
-At least 40 rows tall
-```
 
 The game uses Unicode symbols and ANSI terminal escape codes. A modern terminal is recommended.
 
@@ -216,10 +190,6 @@ gcc -Wall -Wextra -std=c11 blink.c -o blink
 
 Make the terminal bigger or zoom out.
 
-```text
-BLINK needs enough terminal space for the map and UI.
-```
-
 ### Symbols look wrong
 
 Use a terminal with UTF-8 support.
@@ -236,19 +206,17 @@ Windows: Windows Terminal
 
 This project was built as a C practice project, with focus on:
 
-```text
-Real-time terminal input
-Cross-platform terminal handling
-Structs
-Arrays
-File saves
-Local profiles
-Collision detection
-Simple AI
-Terminal rendering
-Game loop timing
-ANSI escape codes
-```
+- Real-time terminal input
+- Cross-platform terminal handling
+- Structs
+- Arrays
+- File saves
+- Local profiles
+- Collision detection
+- Simple AI
+- Terminal rendering
+- Game loop timing
+- ANSI escape codes
 
 The code now uses a small platform layer so the same source can compile on Linux, macOS, and Windows.
 
