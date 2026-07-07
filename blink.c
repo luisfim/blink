@@ -2644,10 +2644,10 @@ void drawRoomRealtime(void) {
     snprintf(hudLine, sizeof(hudLine), "Profile: %s   Room: %d/%d   Time: %s", hasCurrentPlayer ? currentPlayerName : "NONE", currentLevel + 1, LEVEL_COUNT, elapsedBuffer);
     printBoxCentered(hudLine);
 
-    snprintf(statusLine, sizeof(statusLine), "Mode: %s   State: %s   Signal: %d/%d", alertMode ? "ALERT" : "CALM", blinkActive ? "BLINKING" : "VISIBLE", signalPower, MAX_SIGNAL);
+    snprintf(statusLine, sizeof(statusLine), "Signal: %d/%d", signalPower, MAX_SIGNAL);
     printBoxCentered(statusLine);
 
-    snprintf(statusLine, sizeof(statusLine), "Hat: %s   Facing: %c", hatText, lastDirection);
+    snprintf(statusLine, sizeof(statusLine), "Facing: %c", lastDirection);
     printBoxCentered(statusLine);
     printBoxBottom();
 
