@@ -14,7 +14,7 @@
 You play as **Zero**, a small digital survivor moving through a hostile system. Move fast, hide your signal, follow the one, and escape before the system deletes you.
 
 <p align="center">
-  <img src="assets/screenshot.jpeg" alt="BLINK gameplay screenshot" width="600">
+  <img src="assets/screenshot.jpeg" alt="BLINK gameplay screenshot" width="100">
 </p>
 
 ---
