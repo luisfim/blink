@@ -25,6 +25,7 @@
 #define LAURA_HEART_NAME "LAURA♥"
 #define LEADERBOARD_NAME_WIDTH 8
 #define HEART_SYMBOL "♥"
+#define UI_WIDTH 60
 
 #define BLINK_DURATION_MS 650
 #define PLAYER_MOVE_DELAY_MS 110
@@ -33,8 +34,8 @@
 #define ENEMY_BULLET_DELAY_MS 100
 #define GUARD_PATROL_DELAY_MS 430
 #define GUARD_ALERT_DELAY_MS 210
-#define HARD_GUARD_PATROL_DELAY_MS 240
-#define HARD_GUARD_ALERT_DELAY_MS 120
+#define HARD_GUARD_PATROL_DELAY_MS 200
+#define HARD_GUARD_ALERT_DELAY_MS 100
 #define ENEMY_SHOOT_DELAY_MS 520
 #define FRAME_DELAY_MS 50
 #define ONE_GUIDE_DURATION_MS 1300
@@ -64,7 +65,7 @@
     [ and ] = exit tiles
     1 = the guide, a memory bit moving toward the door
     ^ > < v = normal guards and their direction
-    » « = fast guards with omnidirectional shots
+    ▲ ▶ ◀ ▼ = fast guards
 
     During gameplay:
     W A S D = move without Enter
@@ -146,11 +147,11 @@ Level levels[LEVEL_COUNT] = {
         8,
         {
             {2, 40, '<', 0, 0},
-            {6, 5, '>', 0, 0},
+            {5, 5, '>', 0, 0},
             {10, 28, 'v', 0, 0},
             {15, 44, '<', 0, 0},
             {20, 10, '>', 0, 0},
-            {26, 35, '^', 0, 0},
+            {26, 48, '<', 0, 0},
             {27, 52, '<', 0, 0},
             {3, 55, '<', 1, 0},
         },
@@ -191,16 +192,22 @@ Level levels[LEVEL_COUNT] = {
         },
         28,
         1,
-        8,
+        12,
         {
-            {28, 18, '>', 0, 0},
-            {28, 44, '>', 0, 0},
-            {2, 48, '<', 0, 0},
-            {6, 14, '>', 1, 0},
+            {28, 24, '>', 0, 0},
+            {24, 44, '^', 0, 0},
+            {2, 42, '<', 0, 0},
+            {5, 18, 'v', 1, 0},
             {24, 30, '>', 0, 0},
-            {20, 35, '<', 1, 0},
-            {10, 35, '<', 0, 0},
-            {14, 54, '<', 1, 0},
+            {20, 37, '^', 1, 0},
+            {14, 33, 'v', 0, 0},
+            {15, 47, 'v', 1, 0},
+
+            /* Cascading vertical guard pattern. */
+            {14, 23, '^', 0, 0},
+            {15, 21, '^', 0, 0},
+            {16, 19, '^', 0, 0},
+            {17, 17, '^', 0, 0},
         },
         "Room 2. Zero follows a thinner spiral toward the center door."
     },
@@ -241,14 +248,14 @@ Level levels[LEVEL_COUNT] = {
         1,
         8,
         {
-            {3, 20, '>', 0, 0},
-            {4, 51, '<', 1, 0},
-            {8, 12, 'v', 0, 0},
+            {3, 22, '>', 0, 0},
+            {5, 50, '<', 1, 0},
+            {7, 10, 'v', 0, 0},
             {11, 35, '<', 0, 0},
             {15, 10, '>', 1, 0},
-            {20, 48, '^', 0, 0},
-            {24, 25, '>', 1, 0},
-            {27, 50, '<', 1, 0},
+            {22, 34, '^', 0, 0},
+            {22, 50, '<', 1, 0},
+            {27, 48, '<', 1, 0},
         },
         "Room 3. Zero crosses a dense terminal maze."
     }
@@ -293,6 +300,7 @@ int oneGuideCol = 0;
 char oneGuideDirection = '>';
 long long oneGuideEndMs = 0;
 long long oneGuideLastMoveMs = 0;
+int levelThreeDoorGlitched = 0;
 
 char lastDirection = '>';
 char lastMoveCommand = '\0';
@@ -408,6 +416,77 @@ void printPaddedText(const char *text, int width) {
     }
 }
 
+void printRepeatedText(const char *text, int count) {
+    for (int i = 0; i < count; i++) {
+        printf("%s", text);
+    }
+}
+
+void printBoxTop(void) {
+    printf("╔");
+    printRepeatedText("═", UI_WIDTH);
+    printf("╗\n");
+}
+
+void printBoxMiddle(void) {
+    printf("╠");
+    printRepeatedText("═", UI_WIDTH);
+    printf("╣\n");
+}
+
+void printBoxBottom(void) {
+    printf("╚");
+    printRepeatedText("═", UI_WIDTH);
+    printf("╝\n");
+}
+
+void printBoxCentered(const char *text) {
+    int length = visibleTextLength(text);
+    int leftPadding = (UI_WIDTH - length) / 2;
+    int rightPadding = UI_WIDTH - length - leftPadding;
+
+    if (leftPadding < 0) {
+        leftPadding = 0;
+    }
+
+    if (rightPadding < 0) {
+        rightPadding = 0;
+    }
+
+    printf("║");
+    for (int i = 0; i < leftPadding; i++) {
+        printf(" ");
+    }
+    printf("%s", text);
+    for (int i = 0; i < rightPadding; i++) {
+        printf(" ");
+    }
+    printf("║\n");
+}
+
+void printBoxLeft(const char *text) {
+    int length = visibleTextLength(text);
+    int rightPadding = UI_WIDTH - length - 2;
+
+    if (rightPadding < 0) {
+        rightPadding = 0;
+    }
+
+    printf("║  %s", text);
+    for (int i = 0; i < rightPadding; i++) {
+        printf(" ");
+    }
+    printf("║\n");
+}
+
+void printBoxBlank(void) {
+    printf("║");
+    for (int i = 0; i < UI_WIDTH; i++) {
+        printf(" ");
+    }
+    printf("║\n");
+}
+
 void playBeep(int times, int delayMs) {
     for (int i = 0; i < times; i++) {
         printf("\a");
@@ -481,6 +560,55 @@ void waitForBack(void) {
             return;
         }
     }
+}
+
+int confirmChoice(const char *title, const char *question) {
+    char input[32];
+
+    while (1) {
+        clearScreen();
+        printBoxTop();
+        printBoxCentered(title);
+        printBoxMiddle();
+        printBoxCentered(question);
+        printBoxBlank();
+        printBoxLeft("[Y] Yes");
+        printBoxLeft("[N] No");
+        printBoxBottom();
+        printf("\nCommand: ");
+
+        if (fgets(input, sizeof(input), stdin) == NULL) {
+            return 0;
+        }
+
+        char command = (char)tolower((unsigned char)input[0]);
+
+        if (command == 'y') {
+            return 1;
+        }
+
+        if (command == 'n' || command == 'b') {
+            return 0;
+        }
+    }
+}
+
+int confirmQuitGame(void) {
+    return confirmChoice("QUIT BLINK?", "Close the game?");
+}
+
+int confirmAbandonRun(void) {
+    int confirmed;
+
+    disableRawMode();
+    confirmed = confirmChoice("ABANDON RUN?", "Leave this run and lose this attempt?");
+
+    if (!confirmed) {
+        enableRawMode();
+        clearScreen();
+    }
+
+    return confirmed;
 }
 
 int isInsideMap(int row, int col) {
@@ -900,10 +1028,11 @@ void askForPlayerName(void) {
 
     while (1) {
         clearScreen();
-        printf("╔══════════════════════╗\n");
-        printf("║     PLAYER NAME      ║\n");
-        printf("╚══════════════════════╝\n\n");
-        printf("Name: ");
+        printBoxTop();
+        printBoxCentered("PLAYER NAME");
+        printBoxMiddle();
+        printBoxBottom();
+        printf("\nName: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return;
@@ -927,14 +1056,19 @@ void showProfileMenu(void) {
 
     while (1) {
         clearScreen();
-        printf("╔══════════════════════╗\n");
-        printf("║    BLINK PROFILE     ║\n");
-        printf("╚══════════════════════╝\n\n");
-        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
-        printf("C - create/load profile\n");
-        printf("D - delete current profile\n");
-        printf("B - back\n\n");
-        printf("Command: ");
+        printBoxTop();
+        printBoxCentered("BLINK PROFILE");
+        printBoxMiddle();
+
+        char profileLine[80];
+        snprintf(profileLine, sizeof(profileLine), "Current profile: %s", hasCurrentPlayer ? currentPlayerName : "NONE");
+        printBoxCentered(profileLine);
+        printBoxBlank();
+        printBoxLeft("[C] Create / load profile");
+        printBoxLeft("[D] Delete current profile");
+        printBoxLeft("[B] Back");
+        printBoxBottom();
+        printf("\nCommand: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return;
@@ -957,13 +1091,20 @@ void showHatMenu(void) {
 
     while (1) {
         clearScreen();
-        printf("╔══════════════════════╗\n");
-        printf("║      BLINK HATS      ║\n");
-        printf("╚══════════════════════╝\n\n");
-        printf("Instruction: FOLLOW THE ONE.\n");
-        printf("Current player: %s\n", getPlayerSymbol());
-        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
-        printf("0 - no hat: o\n");
+        printBoxTop();
+        printBoxCentered("BLINK HATS");
+        printBoxMiddle();
+        printBoxCentered("FOLLOW THE ONE.");
+
+        char playerLine[80];
+        snprintf(playerLine, sizeof(playerLine), "Current player: %s", getPlayerSymbol());
+        printBoxCentered(playerLine);
+
+        char profileLine[80];
+        snprintf(profileLine, sizeof(profileLine), "Current profile: %s", hasCurrentPlayer ? currentPlayerName : "NONE");
+        printBoxCentered(profileLine);
+        printBoxMiddle();
+        printBoxLeft("[0] No hat: o");
 
         for (int i = 0; i < HAT_COUNT; i++) {
             const char *power = "";
@@ -975,17 +1116,15 @@ void showHatMenu(void) {
                 power = "double shot";
             }
 
-            printf("%d - hat %d: %s [%s] - %s\n",
-                   i + 1,
-                   i + 1,
-                   hatSymbols[i],
-                   unlockedHats[i] ? "unlocked" : "locked",
-                   power);
+            char hatLine[120];
+            snprintf(hatLine, sizeof(hatLine), "[%d] %s  %s  - %s", i + 1, hatSymbols[i], unlockedHats[i] ? "unlocked" : "locked", power);
+            printBoxLeft(hatLine);
         }
 
-        printf("\nPress 0-3 to choose.\n");
-        printf("Press B to go back.\n\n");
-        printf("Command: ");
+        printBoxMiddle();
+        printBoxLeft("Press 0-3 to choose, or B to go back.");
+        printBoxBottom();
+        printf("\nCommand: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return;
@@ -1357,20 +1496,27 @@ int showTitleScreen(void) {
 
     while (1) {
         clearScreen();
-        printf("╔════════════════════════════════╗\n");
-        printf("║  ██████╗ ██╗     ██╗███╗   ██╗██╗  ██╗ ║\n");
-        printf("║  ██╔══██╗██║     ██║████╗  ██║██║ ██╔╝ ║\n");
-        printf("║  ██████╔╝██║     ██║██╔██╗ ██║█████╔╝  ║\n");
-        printf("║  ██╔══██╗██║     ██║██║╚██╗██║██╔═██╗  ║\n");
-        printf("║  ██████╔╝███████╗██║██║ ╚████║██║  ██╗ ║\n");
-        printf("║  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ║\n");
-        printf("╚════════════════════════════════╝\n\n");
-        printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
-        printf("N - new run\n");
-        printf("P - profile\n");
-        printf("L - leaderboard\n");
-        printf("Q - quit\n\n");
-        printf("Command: ");
+        printBoxTop();
+        printBoxCentered("██████╗  ██╗     ██╗ ███╗   ██╗ ██╗  ██╗");
+        printBoxCentered("██╔══██╗ ██║     ██║ ████╗  ██║ ██║ ██╔╝");
+        printBoxCentered("██████╔╝ ██║     ██║ ██╔██╗ ██║ █████╔╝ ");
+        printBoxCentered("██╔══██╗ ██║     ██║ ██║╚██╗██║ ██╔═██╗ ");
+        printBoxCentered("██████╔╝ ███████╗██║ ██║ ╚████║ ██║  ██╗");
+        printBoxCentered("╚═════╝  ╚══════╝╚═╝ ╚═╝  ╚═══╝ ╚═╝  ╚═╝");
+        printBoxMiddle();
+        printBoxCentered("FOLLOW THE ONE.");
+        printBoxBlank();
+
+        char profileLine[80];
+        snprintf(profileLine, sizeof(profileLine), "Current profile: %s", hasCurrentPlayer ? currentPlayerName : "NONE");
+        printBoxCentered(profileLine);
+        printBoxMiddle();
+        printBoxLeft("[N] New run");
+        printBoxLeft("[P] Profile");
+        printBoxLeft("[L] Leaderboard");
+        printBoxLeft("[Q] Quit");
+        printBoxBottom();
+        printf("\nCommand: ");
 
         if (fgets(input, sizeof(input), stdin) == NULL) {
             return 0;
@@ -1379,7 +1525,11 @@ int showTitleScreen(void) {
         char command = (char)tolower((unsigned char)input[0]);
 
         if (command == 'q') {
-            return 0;
+            if (confirmQuitGame()) {
+                return 0;
+            }
+
+            continue;
         }
 
         if (command == 'n' || command == '\n') {
@@ -1588,7 +1738,7 @@ void loadLevel(int levelIndex) {
         strcpy(room[row], levels[levelIndex].layout[row]);
 
         for (int col = 0; col < WIDTH; col++) {
-            if (room[row][col] == '#' && ((row * 7 + col * 11 + levelIndex * 13) % 13 == 0)) {
+            if (room[row][col] == '#' && ((row * 7 + col * 11 + levelIndex * 13) % 8 == 0)) {
                 damagedWalls[row][col] = 1;
             } else {
                 damagedWalls[row][col] = 0;
@@ -1629,6 +1779,7 @@ void resetGame(void) {
     inSecretRoom = 0;
     secretLevelIndex = -1;
     secretEntranceSide = 1;
+    levelThreeDoorGlitched = 0;
 
     for (int i = 0; i < LEVEL_COUNT; i++) {
         collectedHatThisLevel[i] = 0;
@@ -1661,7 +1812,23 @@ const char *guardSymbolAt(int row, int col) {
     for (int i = 0; i < guardCount; i++) {
         if (guards[i].row == row && guards[i].col == col) {
             if (guards[i].hard) {
-                return guards[i].direction == '<' ? "«" : "»";
+                if (guards[i].direction == '^') {
+                    return "▲";
+                }
+
+                if (guards[i].direction == 'v') {
+                    return "▼";
+                }
+
+                if (guards[i].direction == '<') {
+                    return "◀";
+                }
+
+                if (guards[i].direction == '>') {
+                    return "▶";
+                }
+
+                return "▶";
             }
 
             static char symbol[2];
@@ -2111,7 +2278,7 @@ void fireEnemyBulletFromGuard(int guardIndex, char direction, long long currentM
     enemyBullets[slot].direction = direction;
     enemyBullets[slot].lastMoveMs = currentMs;
 
-    strcpy(message, guards[guardIndex].hard ? "A fast guard sprays fire." : "A guard fires. The shot cuts through the room.");
+    strcpy(message, guards[guardIndex].hard ? "A fast guard fires." : "A guard fires. The shot cuts through the room.");
 }
 
 void guardsShootIfPossible(long long currentMs) {
@@ -2120,34 +2287,20 @@ void guardsShootIfPossible(long long currentMs) {
     }
 
     int fired = 0;
-    const char directions[4] = {'^', 'v', '<', '>'};
 
     for (int i = 0; i < guardCount; i++) {
-        if (guards[i].hard) {
-            for (int d = 0; d < 4; d++) {
-                int ammoBefore = guardAmmo[i];
-                fireEnemyBulletFromGuard(i, directions[d], currentMs);
-                if (guardAmmo[i] < ammoBefore) {
-                    fired = 1;
-                }
+        char shotDirection = '>';
 
-                if (playerCaught) {
-                    return;
-                }
+        if (guardHasLineOfSightToPlayer(i, &shotDirection)) {
+            int ammoBefore = guardAmmo[i];
+            fireEnemyBulletFromGuard(i, shotDirection, currentMs);
+
+            if (guardAmmo[i] < ammoBefore) {
+                fired = 1;
             }
-        } else {
-            char shotDirection = '>';
 
-            if (guardHasLineOfSightToPlayer(i, &shotDirection)) {
-                int ammoBefore = guardAmmo[i];
-                fireEnemyBulletFromGuard(i, shotDirection, currentMs);
-                if (guardAmmo[i] < ammoBefore) {
-                    fired = 1;
-                }
-
-                if (playerCaught) {
-                    return;
-                }
+            if (playerCaught) {
+                return;
             }
         }
     }
@@ -2282,16 +2435,47 @@ void moveChasingGuards(long long currentMs) {
     }
 }
 
+void removeAllExitTiles(void) {
+    for (int row = 0; row < HEIGHT; row++) {
+        for (int col = 0; col < WIDTH; col++) {
+            if (room[row][col] == '[' || room[row][col] == ']') {
+                room[row][col] = '.';
+            }
+        }
+    }
+}
+
+void glitchFinalDoor(long long currentMs) {
+    removeAllExitTiles();
+
+    /* The final door jumps to a different memory slot, forcing one last route. */
+    room[25][2] = '[';
+    room[25][3] = ']';
+
+    levelThreeDoorGlitched = 1;
+    oneGuideActive = 0;
+    startOneGuideAnimation(currentMs);
+    clearPlayerBullets();
+    clearEnemyBullets();
+    playBeep(4, 80);
+    strcpy(message, "Oh no. The door glitched into another memory slot.");
+}
+
 int reachedExit(void) {
     return room[playerRow][playerCol] == '[' || room[playerRow][playerCol] == ']';
 }
 
-int advanceLevelIfPossible(void) {
+int advanceLevelIfPossible(long long currentMs) {
     if (!reachedExit()) {
         return 0;
     }
 
     if (currentLevel == LEVEL_COUNT - 1) {
+        if (!levelThreeDoorGlitched) {
+            glitchFinalDoor(currentMs);
+            return 1;
+        }
+
         return 0;
     }
 
@@ -2336,39 +2520,44 @@ void updateWorld(long long currentMs) {
 
 void drawRoomRealtime(void) {
     char elapsedBuffer[32];
+    char hudLine[160];
+    char statusLine[160];
+    char hatText[64];
     long long elapsed = nowMs() - runStartMs;
     formatTime(elapsed, elapsedBuffer, sizeof(elapsedBuffer));
 
-    moveCursorHome();
-    printf("╔════════════════════════════════╗\n");
-    printf("║             BLINK              ║\n");
-    printf("╚════════════════════════════════╝\n\n");
-    printf("Profile:    %s\n", hasCurrentPlayer ? currentPlayerName : "NONE");
-    printf("Room:       %d/%d\n", currentLevel + 1, LEVEL_COUNT);
-    printf("Time:       %s\n", elapsedBuffer);
-
-    if (alertMode) {
-        printf("Mode:       ALERT - THEY KNOW WHERE YOU ARE\n");
-    } else {
-        printf("Mode:       CALM\n");
-    }
-
-    printf("State:      %s\n", blinkActive ? "BLINKING" : "VISIBLE");
-    printf("Signal:     %d/%d\n", signalPower, MAX_SIGNAL);
-
     if (hatActive(0)) {
-        printf("Hat:        ô CONTACT DELETE\n");
+        strcpy(hatText, "ô CONTACT DELETE");
     } else if (hatActive(1)) {
-        printf("Hat:        õ PIERCING WAVE\n");
+        strcpy(hatText, "õ PIERCING WAVE");
     } else if (hatActive(2)) {
-        printf("Hat:        ö DOUBLE SHOT\n");
+        strcpy(hatText, "ö DOUBLE SHOT");
     } else {
-        printf("Hat:        none\n");
+        strcpy(hatText, "none");
     }
 
-    printf("Facing:     %c\n\n", lastDirection);
+    moveCursorHome();
+    printBoxTop();
+    printBoxCentered("BLINK");
+    printBoxCentered("FOLLOW THE ONE.");
+    printBoxMiddle();
+
+    snprintf(hudLine, sizeof(hudLine), "Profile: %s   Room: %d/%d   Time: %s", hasCurrentPlayer ? currentPlayerName : "NONE", currentLevel + 1, LEVEL_COUNT, elapsedBuffer);
+    printBoxCentered(hudLine);
+
+    snprintf(statusLine, sizeof(statusLine), "Mode: %s   State: %s   Signal: %d/%d", alertMode ? "ALERT" : "CALM", blinkActive ? "BLINKING" : "VISIBLE", signalPower, MAX_SIGNAL);
+    printBoxCentered(statusLine);
+
+    snprintf(statusLine, sizeof(statusLine), "Hat: %s   Facing: %c", hatText, lastDirection);
+    printBoxCentered(statusLine);
+    printBoxBottom();
+
+    printf("╔");
+    printRepeatedText("═", WIDTH);
+    printf("╗\n");
 
     for (int row = 0; row < HEIGHT; row++) {
+        printf("║");
         for (int col = 0; col < WIDTH; col++) {
             if (row == playerRow && col == playerCol) {
                 if (playerDead) {
@@ -2402,12 +2591,40 @@ void drawRoomRealtime(void) {
                 printf("%c", room[row][col]);
             }
         }
-        printf("\n");
+        printf("║\n");
     }
 
-    printf("\nWASD move | SPACE blink | F shoot | B back\n");
-    printf("Message: %s\n", message);
+    printf("╚");
+    printRepeatedText("═", WIDTH);
+    printf("╝\n");
+
+    printBoxTop();
+    if (playerDead) {
+        printBoxCentered("ZERO DELETED | B continue");
+    } else {
+        printBoxCentered("WASD move | SPACE blink | F shoot | B back");
+    }
+    printBoxLeft(message);
+    printBoxBottom();
     fflush(stdout);
+}
+
+void waitForRawBackAfterDeath(void) {
+    while (1) {
+        if (keyAvailable()) {
+            int key = readKey();
+
+            if (key == -1) {
+                continue;
+            }
+
+            if (tolower((unsigned char)key) == 'b') {
+                return;
+            }
+        }
+
+        sleepMs(20);
+    }
 }
 
 void handleGameplayInput(long long currentMs, int *quitRun) {
@@ -2421,7 +2638,10 @@ void handleGameplayInput(long long currentMs, int *quitRun) {
         char command = (char)tolower(key);
 
         if (command == 'b') {
-            *quitRun = 1;
+            if (confirmAbandonRun()) {
+                *quitRun = 1;
+            }
+
             return;
         }
 
@@ -2432,6 +2652,60 @@ void handleGameplayInput(long long currentMs, int *quitRun) {
         } else if (command == 'f') {
             firePlayerBullet(currentMs);
         }
+    }
+}
+
+void playFinalTransformationRoom(void) {
+    const int zeroStart = 10;
+    const int oneCol = 48;
+    const int rowWidth = 58;
+
+    for (int step = zeroStart; step <= oneCol; step += 2) {
+        clearScreen();
+        printBoxTop();
+        printBoxCentered("FINAL MEMORY SLOT");
+        printBoxMiddle();
+        printBoxCentered("Zero follows the one.");
+        printBoxBottom();
+        printf("\n╔");
+        printRepeatedText("═", rowWidth);
+        printf("╗\n");
+
+        for (int row = 0; row < 9; row++) {
+            printf("║");
+            for (int col = 0; col < rowWidth; col++) {
+                if (row == 4 && col == step && step < oneCol) {
+                    printf("o");
+                } else if (row == 4 && col == oneCol) {
+                    printf("1");
+                } else if (row == 4 && col > step && col < oneCol) {
+                    printf(".");
+                } else {
+                    printf(" ");
+                }
+            }
+            printf("║\n");
+        }
+
+        printf("╚");
+        printRepeatedText("═", rowWidth);
+        printf("╝\n");
+        fflush(stdout);
+        sleepMs(70);
+    }
+
+    playBeep(3, 120);
+
+    for (int i = 0; i < 4; i++) {
+        clearScreen();
+        printBoxTop();
+        printBoxCentered("FINAL MEMORY SLOT");
+        printBoxMiddle();
+        printBoxCentered(i % 2 == 0 ? "o = 1" : "1 = 1");
+        printBoxCentered("The memory slot changes state.");
+        printBoxBottom();
+        fflush(stdout);
+        sleepMs(300);
     }
 }
 
@@ -2452,7 +2726,7 @@ int runRealtimeGame(void) {
         updatePlayerPose(currentMs);
 
         if (reachedExit()) {
-            if (advanceLevelIfPossible()) {
+            if (advanceLevelIfPossible(currentMs)) {
                 /* Continue the same timed run. */
             } else {
                 won = 1;
@@ -2469,6 +2743,11 @@ int runRealtimeGame(void) {
     }
 
     drawRoomRealtime();
+
+    if (playerCaught && !quitRun && !won) {
+        waitForRawBackAfterDeath();
+    }
+
     disableRawMode();
 
     if (quitRun) {
