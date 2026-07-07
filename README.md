@@ -40,18 +40,6 @@ Q        Quit from the main menu
 ```
 ---
 
-## Signal
-
-Zero uses **Signal** as a limited resource.
-
-Signal is spent to Blink or Shoot
-
-Signal can be restored by collecting *
-
-Managing Signal is part of the strategy. Shooting everything is possible, but not always smart.
-
----
-
 ## Requirements
 
 You need a C compiler and a terminal with UTF-8 support.
