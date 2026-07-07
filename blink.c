@@ -341,7 +341,9 @@ void sleepMs(int ms) {
 
 void playOpeningAnimation(void) {
     const char *forms[] = {
-        "_", " ", "_", ".", ":", "·", "0", "o", "ø", "ó", "ò", "ô", "õ", "ö", "0", "o"
+        "_", " ", "_", ".", ":", "·", "º", "0", "o",
+        "ø", "ó", "ò", " ", "ô", "õ", "ö",
+        "0", " ", "0", "o"
     };
     const int frameCount = (int)(sizeof(forms) / sizeof(forms[0]));
 
@@ -351,12 +353,20 @@ void playOpeningAnimation(void) {
         printf("║          BLINK BOOT            ║\n");
         printf("╚════════════════════════════════╝\n\n");
         printf("memory slot: 0\n");
-        printf("instruction: FOLLOW THE ONE.\n\n");
+        printf("instruction: FOLLOW THE ONE.\n");
         printf("> %s\n", forms[i]);
         fflush(stdout);
-        sleepMs(i < 6 ? 45 : 65);
+
+        if (i < 6) {
+            sleepMs(85);
+        } else if (i < frameCount - 3) {
+            sleepMs(115);
+        } else {
+            sleepMs(180);
+        }
     }
 
+    sleepMs(600);
     clearScreen();
 }
 
@@ -1342,7 +1352,6 @@ int showTitleScreen(void) {
         printf("║  ██████╔╝███████╗██║██║ ╚████║██║  ██╗ ║\n");
         printf("║  ╚═════╝ ╚══════╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝ ║\n");
         printf("╚════════════════════════════════╝\n\n");
-        printf("Current player: %s\n", getPlayerSymbol());
         printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
         printf("N - new run\n");
         printf("P - profile\n");
