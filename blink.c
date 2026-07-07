@@ -37,6 +37,8 @@
 #define HARD_GUARD_ALERT_DELAY_MS 120
 #define ENEMY_SHOOT_DELAY_MS 520
 #define FRAME_DELAY_MS 50
+#define ONE_GUIDE_DURATION_MS 1300
+#define ONE_GUIDE_STEP_DELAY_MS 120
 
 
 /*
@@ -60,6 +62,7 @@
     : = normal bullet, player or enemy
     ~ = piercing player bullet while using hat õ
     [ and ] = exit tiles
+    1 = the guide, a memory bit moving toward the door
     ^ > < v = normal guards and their direction
     » « = fast guards with omnidirectional shots
 
@@ -284,6 +287,13 @@ int alertMode = 0;
 Bullet playerBullets[MAX_PLAYER_BULLETS];
 Bullet enemyBullets[MAX_ENEMY_BULLETS];
 
+int oneGuideActive = 0;
+int oneGuideRow = 0;
+int oneGuideCol = 0;
+char oneGuideDirection = '>';
+long long oneGuideEndMs = 0;
+long long oneGuideLastMoveMs = 0;
+
 char lastDirection = '>';
 char lastMoveCommand = '\0';
 long long lastMovePoseMs = 0;
@@ -295,8 +305,10 @@ int selectedHat = -1;
 char currentPlayerName[PLAYER_NAME_STORAGE] = "------";
 int hasCurrentPlayer = 0;
 
+void clearScreen(void);
 void clearPlayerBullets(void);
 void clearEnemyBullets(void);
+int guardAt(int row, int col);
 
 int hatActive(int hatIndex) {
     return selectedHat == hatIndex &&
@@ -325,6 +337,27 @@ void sleepMs(int ms) {
     req.tv_sec = ms / 1000;
     req.tv_nsec = (long)(ms % 1000) * 1000000L;
     nanosleep(&req, NULL);
+}
+
+void playOpeningAnimation(void) {
+    const char *forms[] = {
+        "_", " ", "_", ".", ":", "·", "0", "o", "ø", "ó", "ò", "ô", "õ", "ö", "0", "o"
+    };
+    const int frameCount = (int)(sizeof(forms) / sizeof(forms[0]));
+
+    for (int i = 0; i < frameCount; i++) {
+        clearScreen();
+        printf("╔════════════════════════════════╗\n");
+        printf("║          BLINK BOOT            ║\n");
+        printf("╚════════════════════════════════╝\n\n");
+        printf("memory slot: 0\n");
+        printf("instruction: FOLLOW THE ONE.\n\n");
+        printf("> %s\n", forms[i]);
+        fflush(stdout);
+        sleepMs(i < 6 ? 45 : 65);
+    }
+
+    clearScreen();
 }
 
 void disableRawMode(void) {
@@ -904,6 +937,7 @@ void showHatMenu(void) {
         printf("╔══════════════════════╗\n");
         printf("║      BLINK HATS      ║\n");
         printf("╚══════════════════════╝\n\n");
+        printf("Instruction: FOLLOW THE ONE.\n");
         printf("Current player: %s\n", getPlayerSymbol());
         printf("Current profile: %s\n\n", hasCurrentPlayer ? currentPlayerName : "NONE");
         printf("0 - no hat: o\n");
@@ -1151,6 +1185,7 @@ void generateSecretRoom(int hatIndex) {
     blinkActive = 0;
     clearPlayerBullets();
     clearEnemyBullets();
+    oneGuideActive = 0;
     lastMoveCommand = '\0';
 
     if (hatIndex >= 0 && hatIndex < HAT_COUNT) {
@@ -1427,6 +1462,103 @@ void clearEnemyBullets(void) {
     }
 }
 
+int findExitTile(int *exitRow, int *exitCol) {
+    for (int row = 0; row < HEIGHT; row++) {
+        for (int col = 0; col < WIDTH; col++) {
+            if (room[row][col] == '[' || room[row][col] == ']') {
+                *exitRow = row;
+                *exitCol = col;
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int isGuideStartTile(int row, int col) {
+    if (!isInsideMap(row, col)) {
+        return 0;
+    }
+
+    if (isSolidWallAt(row, col) || guardAt(row, col)) {
+        return 0;
+    }
+
+    return 1;
+}
+
+void startOneGuideAnimation(long long currentMs) {
+    int exitRow;
+    int exitCol;
+
+    oneGuideActive = 0;
+
+    if (!findExitTile(&exitRow, &exitCol)) {
+        return;
+    }
+
+    oneGuideRow = exitRow;
+    oneGuideCol = exitCol;
+    oneGuideDirection = exitCol >= WIDTH / 2 ? '>' : '<';
+
+    if (oneGuideDirection == '>') {
+        for (int col = exitCol - 7; col < exitCol; col++) {
+            if (isGuideStartTile(exitRow, col)) {
+                oneGuideCol = col;
+                break;
+            }
+        }
+    } else {
+        for (int col = exitCol + 7; col > exitCol; col--) {
+            if (isGuideStartTile(exitRow, col)) {
+                oneGuideCol = col;
+                break;
+            }
+        }
+    }
+
+    if (oneGuideCol == exitCol) {
+        int fallbackCol = exitCol + (oneGuideDirection == '>' ? -1 : 1);
+        if (isGuideStartTile(exitRow, fallbackCol)) {
+            oneGuideCol = fallbackCol;
+        } else {
+            return;
+        }
+    }
+
+    oneGuideEndMs = currentMs + ONE_GUIDE_DURATION_MS;
+    oneGuideLastMoveMs = currentMs;
+    oneGuideActive = 1;
+}
+
+void updateOneGuide(long long currentMs) {
+    if (!oneGuideActive) {
+        return;
+    }
+
+    if (currentMs >= oneGuideEndMs) {
+        oneGuideActive = 0;
+        return;
+    }
+
+    if (currentMs - oneGuideLastMoveMs < ONE_GUIDE_STEP_DELAY_MS) {
+        return;
+    }
+
+    oneGuideLastMoveMs = currentMs;
+
+    if (oneGuideDirection == '>') {
+        oneGuideCol++;
+    } else if (oneGuideDirection == '<') {
+        oneGuideCol--;
+    }
+
+    if (!isInsideMap(oneGuideRow, oneGuideCol) || isExitTileAt(oneGuideRow, oneGuideCol)) {
+        oneGuideActive = 0;
+    }
+}
+
 void loadLevel(int levelIndex) {
     currentLevel = levelIndex;
 
@@ -1434,7 +1566,7 @@ void loadLevel(int levelIndex) {
         strcpy(room[row], levels[levelIndex].layout[row]);
 
         for (int col = 0; col < WIDTH; col++) {
-            if (room[row][col] == '#' && ((row * 7 + col * 11 + levelIndex * 13) % 23 == 0)) {
+            if (room[row][col] == '#' && ((row * 7 + col * 11 + levelIndex * 13) % 13 == 0)) {
                 damagedWalls[row][col] = 1;
             } else {
                 damagedWalls[row][col] = 0;
@@ -1461,8 +1593,8 @@ void loadLevel(int levelIndex) {
     lastMoveCommand = '\0';
     lastMovePoseMs = 0;
     clearEnemyBullets();
-    strncpy(message, levels[levelIndex].introMessage, sizeof(message) - 1);
-    message[sizeof(message) - 1] = '\0';
+    snprintf(message, sizeof(message), "%s Follow the one.", levels[levelIndex].introMessage);
+    startOneGuideAnimation(nowMs());
 }
 
 void resetGame(void) {
@@ -2138,11 +2270,12 @@ int advanceLevelIfPossible(void) {
     }
 
     loadLevel(currentLevel + 1);
-    strcpy(message, "Room loaded. Keep moving.");
+    snprintf(message, sizeof(message), "%s Follow the one.", levels[currentLevel].introMessage);
     return 1;
 }
 
 void updateWorld(long long currentMs) {
+    updateOneGuide(currentMs);
     updateBlink(currentMs);
     movePlayerBullet(currentMs);
 
@@ -2218,6 +2351,8 @@ void drawRoomRealtime(void) {
                 } else {
                     printf("%s", getPlayerSymbol());
                 }
+            } else if (oneGuideActive && row == oneGuideRow && col == oneGuideCol) {
+                printf("1");
             } else if (playerBulletAt(row, col)) {
                 printf("%s", hatActive(1) ? "~" : ":");
             } else if (enemyBulletAt(row, col)) {
@@ -2321,10 +2456,10 @@ int runRealtimeGame(void) {
     if (won) {
         char finishBuffer[32];
         formatTime(finalRunTimeMs, finishBuffer, sizeof(finishBuffer));
-        printf("\nZero reached the final door.\n");
+        printf("\nCongratulations, you are now the number 1.\n");
         printf("Finish time: %s\n", finishBuffer);
-        printf("The terminal loses Zero's signal.\n");
-        printf("You escaped.\n");
+        printf("Zero is rewritten from 0 into 1.\n");
+        printf("The memory slot changes state.\n");
         printf("BLINK.\n");
 
         recordGameResult(1, finalRunTimeMs);
@@ -2340,6 +2475,8 @@ int runRealtimeGame(void) {
 int main(void) {
     srand((unsigned int)time(NULL));
     atexit(disableRawMode);
+
+    playOpeningAnimation();
 
     while (1) {
         if (!showTitleScreen()) {
