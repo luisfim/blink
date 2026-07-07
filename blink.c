@@ -36,7 +36,7 @@
 #define HARD_GUARD_PATROL_DELAY_MS 240
 #define HARD_GUARD_ALERT_DELAY_MS 120
 #define ENEMY_SHOOT_DELAY_MS 520
-#define FRAME_DELAY_MS 33
+#define FRAME_DELAY_MS 50
 
 
 /*
@@ -407,6 +407,10 @@ int readKey(void) {
 
 void clearScreen(void) {
     printf("\033[H\033[J");
+}
+
+void moveCursorHome(void) {
+    printf("\033[H");
 }
 
 void waitForBack(void) {
@@ -2183,7 +2187,7 @@ void drawRoomRealtime(void) {
     long long elapsed = nowMs() - runStartMs;
     formatTime(elapsed, elapsedBuffer, sizeof(elapsedBuffer));
 
-    clearScreen();
+    moveCursorHome();
     printf("╔════════════════════════════════╗\n");
     printf("║             BLINK              ║\n");
     printf("╚════════════════════════════════╝\n\n");
@@ -2284,6 +2288,7 @@ int runRealtimeGame(void) {
 
     resetGame();
     enableRawMode();
+    clearScreen();
 
     while (!quitRun && !playerCaught && !won) {
         long long currentMs = nowMs();
