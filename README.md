@@ -55,9 +55,7 @@ Managing Signal is part of the strategy. Shooting everything is possible, but no
 
 ## Blink
 
-Blink makes Zero temporarily disappear from enemy vision.
-
-Use it to cross dangerous sightlines, escape patrols, or survive when the system enters alert mode.
+Blink makes Zero temporarily disappear from enemy vision.Use it to cross dangerous sightlines, escape patrols, or survive when the system enters alert mode.
 ---
 
 ## Requirements
