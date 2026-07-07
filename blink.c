@@ -1,13 +1,23 @@
+#ifndef _WIN32
 #define _POSIX_C_SOURCE 200809L
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <ctype.h>
 #include <string.h>
 #include <time.h>
+#include <locale.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#include <conio.h>
+#else
 #include <termios.h>
 #include <unistd.h>
 #include <sys/select.h>
+#include <sys/time.h>
+#endif
 
 #define HEIGHT 30
 #define WIDTH 60
@@ -313,6 +323,9 @@ int selectedHat = -1;
 char currentPlayerName[PLAYER_NAME_STORAGE] = "------";
 int hasCurrentPlayer = 0;
 
+void setupTerminal(void);
+void cleanupTerminal(void);
+void disableRawMode(void);
 void clearScreen(void);
 void clearPlayerBullets(void);
 void clearEnemyBullets(void);
@@ -325,8 +338,17 @@ int hatActive(int hatIndex) {
            unlockedHats[selectedHat];
 }
 
+#ifdef _WIN32
+static DWORD originalInputMode = 0;
+static DWORD originalOutputMode = 0;
+static HANDLE consoleInput = NULL;
+static HANDLE consoleOutput = NULL;
+#else
 static struct termios originalTermios;
+#endif
+
 static int rawModeEnabled = 0;
+static int terminalInitialized = 0;
 
 long long runStartMs = 0;
 long long finalRunTimeMs = 0;
@@ -335,16 +357,63 @@ long long lastGuardMoveMs = 0;
 long long lastEnemyShootMs = 0;
 
 long long nowMs(void) {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    return (long long)ts.tv_sec * 1000LL + ts.tv_nsec / 1000000LL;
+#ifdef _WIN32
+    return (long long)GetTickCount64();
+#else
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return (long long)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+#endif
 }
 
 void sleepMs(int ms) {
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
     struct timespec req;
     req.tv_sec = ms / 1000;
     req.tv_nsec = (long)(ms % 1000) * 1000000L;
     nanosleep(&req, NULL);
+#endif
+}
+
+void setupTerminal(void) {
+    if (terminalInitialized) {
+        return;
+    }
+
+    setlocale(LC_ALL, "");
+
+#ifdef _WIN32
+    SetConsoleCP(CP_UTF8);
+    SetConsoleOutputCP(CP_UTF8);
+
+    consoleInput = GetStdHandle(STD_INPUT_HANDLE);
+    consoleOutput = GetStdHandle(STD_OUTPUT_HANDLE);
+
+    if (consoleInput != NULL && consoleInput != INVALID_HANDLE_VALUE) {
+        GetConsoleMode(consoleInput, &originalInputMode);
+    }
+
+    if (consoleOutput != NULL && consoleOutput != INVALID_HANDLE_VALUE) {
+        DWORD mode;
+        GetConsoleMode(consoleOutput, &originalOutputMode);
+        mode = originalOutputMode | ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+        SetConsoleMode(consoleOutput, mode);
+    }
+#endif
+
+    terminalInitialized = 1;
+}
+
+void cleanupTerminal(void) {
+    disableRawMode();
+
+#ifdef _WIN32
+    if (consoleOutput != NULL && consoleOutput != INVALID_HANDLE_VALUE) {
+        SetConsoleMode(consoleOutput, originalOutputMode);
+    }
+#endif
 }
 
 void playOpeningAnimation(void) {
@@ -379,12 +448,21 @@ void playOpeningAnimation(void) {
 }
 
 void disableRawMode(void) {
-    if (rawModeEnabled) {
-        tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
-        printf("\033[?25h");
-        fflush(stdout);
-        rawModeEnabled = 0;
+    if (!rawModeEnabled) {
+        return;
     }
+
+#ifdef _WIN32
+    if (consoleInput != NULL && consoleInput != INVALID_HANDLE_VALUE) {
+        SetConsoleMode(consoleInput, originalInputMode);
+    }
+#else
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &originalTermios);
+#endif
+
+    printf("\033[?25h");
+    fflush(stdout);
+    rawModeEnabled = 0;
 }
 
 int visibleTextLength(const char *text) {
@@ -503,6 +581,13 @@ void enableRawMode(void) {
         return;
     }
 
+#ifdef _WIN32
+    if (consoleInput != NULL && consoleInput != INVALID_HANDLE_VALUE) {
+        DWORD rawMode = originalInputMode;
+        rawMode &= ~(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT);
+        SetConsoleMode(consoleInput, rawMode);
+    }
+#else
     tcgetattr(STDIN_FILENO, &originalTermios);
 
     struct termios raw = originalTermios;
@@ -511,12 +596,17 @@ void enableRawMode(void) {
     raw.c_cc[VTIME] = 0;
 
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+#endif
+
     printf("\033[?25l");
     fflush(stdout);
     rawModeEnabled = 1;
 }
 
 int keyAvailable(void) {
+#ifdef _WIN32
+    return _kbhit();
+#else
     struct timeval tv;
     fd_set readfds;
 
@@ -527,15 +617,24 @@ int keyAvailable(void) {
     FD_SET(STDIN_FILENO, &readfds);
 
     return select(STDIN_FILENO + 1, &readfds, NULL, NULL, &tv) > 0;
+#endif
 }
 
 int readKey(void) {
+#ifdef _WIN32
+    if (!_kbhit()) {
+        return -1;
+    }
+
+    return _getch();
+#else
     unsigned char c;
     if (read(STDIN_FILENO, &c, 1) == 1) {
         return c;
     }
 
     return -1;
+#endif
 }
 
 void clearScreen(void) {
@@ -2780,7 +2879,8 @@ int runRealtimeGame(void) {
 
 int main(void) {
     srand((unsigned int)time(NULL));
-    atexit(disableRawMode);
+    setupTerminal();
+    atexit(cleanupTerminal);
 
     playOpeningAnimation();
 
