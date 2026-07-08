@@ -161,27 +161,3 @@ Linux: GNOME Terminal, Konsole, xterm, Alacritty
 macOS: Terminal.app, iTerm2
 Windows: Windows Terminal
 ```
-
-## Development Notes
-
-This project was built as a C practice project, with focus on:
-
-- Real-time terminal input
-- Cross-platform terminal handling
-- Structs
-- Arrays
-- File saves
-- Local profiles
-- Collision detection
-- Simple AI
-- Terminal rendering
-- Game loop timing
-- ANSI escape codes
-
-The code now uses a small platform layer so the same source can compile on Linux, macOS, and Windows.
-
----
-
-## License
-
-This is a personal learning project.
